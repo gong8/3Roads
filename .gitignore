@@ -1,0 +1,7 @@
+node_modules
+dist
+.turbo
+data/*.db
+data/*.db-journal
+data/*.db-wal
+.env.local

@@ -1,0 +1,59 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model QuestionSet {
+  id        String   @id @default(cuid())
+  name      String
+  theme     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  tossups   Tossup[]
+  bonuses   Bonus[]
+}
+
+model Tossup {
+  id             String      @id @default(cuid())
+  setId          String
+  set            QuestionSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  question       String
+  answer         String
+  powerMarkIndex Int?
+  category       String
+  subcategory    String
+  difficulty     String
+  createdAt      DateTime    @default(now())
+  @@index([setId])
+  @@index([category])
+}
+
+model Bonus {
+  id          String      @id @default(cuid())
+  setId       String
+  set         QuestionSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+  leadin      String
+  category    String
+  subcategory String
+  difficulty  String
+  createdAt   DateTime    @default(now())
+  parts       BonusPart[]
+  @@index([setId])
+  @@index([category])
+}
+
+model BonusPart {
+  id      String @id @default(cuid())
+  bonusId String
+  bonus   Bonus  @relation(fields: [bonusId], references: [id], onDelete: Cascade)
+  partNum Int
+  text    String
+  answer  String
+  value   Int    @default(10)
+  @@index([bonusId])
+  @@unique([bonusId, partNum])
+}

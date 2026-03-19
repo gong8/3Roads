@@ -1,0 +1,1 @@
+{"root":["./src/main.tsx","./src/vite-env.d.ts","./src/components/bonusblock.tsx","./src/components/layout.tsx","./src/components/tossupblock.tsx","./src/hooks/usegenerationstream.ts","./src/hooks/usesets.ts","./src/lib/api.ts","./src/lib/sse.ts","./src/pages/browse.tsx","./src/pages/generate.tsx","./src/pages/setdetail.tsx"],"version":"5.9.3"}
