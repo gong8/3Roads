@@ -8,6 +8,7 @@ export function Layout() {
       <nav className="flex gap-4 border-b border-black pb-2 mb-6">
         <Link to="/" className={pathname === "/" ? "underline" : ""}>browse</Link>
         <Link to="/generate" className={pathname === "/generate" ? "underline" : ""}>generate</Link>
+        <Link to="/play" className={pathname.startsWith("/play") ? "underline" : ""}>play</Link>
       </nav>
       <Outlet />
     </div>

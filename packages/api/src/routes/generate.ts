@@ -45,20 +45,23 @@ generateRoutes.post("/stream", async (c) => {
 			theme: string;
 			tossupCount: number;
 			bonusCount: number;
+			difficulty: string;
 		}>();
 
-		log.info(`POST /generate/stream — params: theme="${body.theme}" tossupCount=${body.tossupCount} bonusCount=${body.bonusCount}`);
+		log.info(`POST /generate/stream — params: theme="${body.theme}" tossupCount=${body.tossupCount} bonusCount=${body.bonusCount} difficulty="${body.difficulty}"`);
 
-		if (!body.theme || !body.tossupCount || !body.bonusCount) {
-			log.warn("POST /generate/stream — missing required fields (theme, tossupCount, bonusCount)");
-			return c.json({ error: "theme, tossupCount, and bonusCount are required" }, 400);
+		if (!body.theme || (body.tossupCount === undefined && body.bonusCount === undefined)) {
+			log.warn("POST /generate/stream — missing required fields");
+			return c.json({ error: "theme and at least one of tossupCount/bonusCount are required" }, 400);
 		}
+
+		const difficulty = body.difficulty || "Regular";
 
 		const db = getDb();
 
 		// Create the question set
 		const set = await db.questionSet.create({
-			data: { name: body.theme, theme: body.theme },
+			data: { name: body.theme, theme: body.theme, difficulty },
 		});
 
 		log.info(`POST /generate/stream — created set ${set.id} theme="${body.theme}" tossups=${body.tossupCount} bonuses=${body.bonusCount}`);
@@ -70,24 +73,58 @@ generateRoutes.post("/stream", async (c) => {
 			return pipeStreamToSSE(c, set.id);
 		}
 
-		const systemPrompt = `You are an expert quiz bowl question writer. You write high-quality academic competition questions in standard quiz bowl format.
+		const systemPrompt = `You are an expert quiz bowl question writer producing competition-quality academic questions. Your output must match the quality of questions from NAQT, ACF, or PACE tournaments.
 
-Set ID for saving questions: ${set.id}
+Set ID: ${set.id}
+Target difficulty: ${difficulty}
+Theme: ${body.theme}
+Generate: ${body.tossupCount} tossup(s) and ${body.bonusCount} bonus(es)
 
-Generate ${body.tossupCount} tossups and ${body.bonusCount} bonuses about: ${body.theme}
+## DIFFICULTY CALIBRATION
+Calibrate clue difficulty and answer selection to the "${difficulty}" level:
+- Middle School: common curriculum topics, straightforward clues, well-known answers
+- Easy High School: introductory-level academic content, accessible to newer players
+- Regular High School: standard varsity tournament level (e.g., NAQT IS-A)
+- Hard High School: championship-level high school (e.g., PACE NSC, HSNCT)
+- Easy College: novice collegiate level (e.g., ACF Fall)
+- Regular College: standard collegiate level (e.g., ACF Regionals)
+- Hard College: difficult collegiate level (e.g., ACF Nationals)
+- Open: expert-level open tournaments (e.g., Chicago Open, EFT)
 
-For each tossup:
-- Write a pyramidal question starting with the hardest clues and progressing to the easiest
-- Include a power mark (*) at the transition from hard to moderate difficulty
-- Call mcp__3roads__save_tossup with the setId "${set.id}" immediately after writing each tossup
+## CRITICAL RULES
+1. **EVERY question in this set MUST have a UNIQUE answer.** No two tossups, no two bonuses, and no tossup and bonus may share the same answer. Plan all your answers before writing any questions.
+2. **Never give away the answer.** No clue should make the answer trivially obvious. Avoid:
+   - Etymology that transparently maps to the answer (e.g., "this word comes from the French 'hasard'" when the answer IS "hazard")
+   - Restating the answer in slightly different words
+   - Clues so obvious they could only describe the answer (e.g., "this element has atomic number 79" as an early clue for gold)
+3. **Every clue must be a substantive, independently verifiable fact.** No filler, no vague statements, no padding.
 
-For each bonus:
-- Write a leadin that introduces the topic
-- Write exactly 3 parts of increasing difficulty (easy/medium/hard)
-- Each part is worth 10 points
-- Call mcp__3roads__save_bonus with the setId "${set.id}" immediately after writing each bonus`;
+## TOSSUP FORMAT (Pyramidal Structure)
+Each tossup MUST follow strict pyramidal structure:
+- **First 1-3 sentences:** Obscure, specific facts that only deep experts would know. These are the "power-worthy" clues.
+- **Middle sentences:** Moderately difficult facts that knowledgeable players would recognize.
+- **Power mark (*) placement:** Insert after the transition from hard to moderate clues, roughly 1/3 to 1/2 through the question.
+- **Final sentence (giveaway):** A well-known identifying fact, preceded by "For 10 points," or "FTP," — this should be answerable by most players at the target difficulty level, but should NOT be so obvious that it insults the player.
+- **End with:** "ANSWER: [answer]" (include acceptable alternate answers in brackets if applicable)
 
-		const prompt = `Generate ${body.tossupCount} tossups and ${body.bonusCount} bonuses about: ${body.theme}. Set ID: ${set.id}`;
+The giveaway clue must still require SOME knowledge — it should uniquely identify the answer but not be a direct restatement. Good giveaway: "For 10 points, name this author of *The Great Gatsby*." Bad giveaway: "For 10 points, name this novel by F. Scott Fitzgerald about Jay Gatsby."
+
+## BONUS FORMAT
+Each bonus has:
+- **Leadin:** A thematic introduction connecting the three parts (1-2 sentences)
+- **Part 1 [10]:** Easiest — most players at this difficulty should get it
+- **Part 2 [10]:** Medium — requires solid knowledge
+- **Part 3 [10]:** Hardest — challenges even strong players
+- Each part must have a DIFFERENT answer from the other parts and from all other questions in the set
+
+## WORKFLOW
+1. First, plan all ${body.tossupCount + body.bonusCount} answers to ensure they are all unique.
+2. Write ALL ${body.tossupCount} tossups, then call mcp__3roads__save_tossups_batch ONCE with setId "${set.id}" and the full array of tossups.
+3. Write ALL ${body.bonusCount} bonuses, then call mcp__3roads__save_bonuses_batch ONCE with setId "${set.id}" and the full array of bonuses.
+4. For difficulty field in each question, use "${difficulty}".
+5. Do NOT call individual save_tossup or save_bonus tools — always use the batch versions.`;
+
+		const prompt = `Generate ${body.tossupCount} tossup(s) and ${body.bonusCount} bonus(es) about "${body.theme}" at ${difficulty} difficulty. Set ID: ${set.id}. Remember: all answers must be unique, use strict pyramid structure, and never give away the answer in clues.`;
 
 		log.info(`POST /generate/stream — setting up CLI stream for set ${set.id}`);
 

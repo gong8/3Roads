@@ -15,13 +15,12 @@ const LLM_MODEL = process.env.LLM_MODEL || "sonnet";
 const SYSTEM_PROMPT_SUFFIX = [
 	"",
 	"IMPORTANT CONSTRAINTS:",
-	"- You are a quiz bowl question writer. Use MCP tools prefixed with mcp__3roads__ to save questions.",
-	"- Never attempt to use filesystem, code editing, web browsing, or any non-MCP tools.",
-	"- For each tossup, call mcp__3roads__save_tossup immediately after writing it.",
-	"- For each bonus, call mcp__3roads__save_bonus immediately after writing it.",
-	"- Generate pyramidal tossups: start with obscure clues, progressively get easier, include a power mark (*) at the transition point.",
-	"- Generate bonuses with a leadin and exactly 3 parts of increasing difficulty (easy/medium/hard), each worth 10 points.",
+	"- Use ONLY MCP tools prefixed with mcp__3roads__ to save questions. Never attempt to use filesystem, code editing, web browsing, or any non-MCP tools.",
+	"- Generate ALL tossups first, then call mcp__3roads__save_tossups_batch ONCE with the full array. Then generate ALL bonuses, then call mcp__3roads__save_bonuses_batch ONCE. Do NOT call individual save_tossup or save_bonus tools.",
 	"- Always include category, subcategory, and difficulty for each question.",
+	"- NEVER reuse an answer across questions in the same set. Every tossup and every bonus part must have a distinct answer.",
+	"- NEVER write clues that transparently give away the answer through etymology, word games, or trivial restatement.",
+	"- Every tossup must be strictly pyramidal: hardest clues first, power mark at 1/3-1/2 through, giveaway last.",
 ].join("\n");
 
 const BLOCKED_BUILTIN_TOOLS = [
@@ -116,7 +115,7 @@ function buildCliArgs(
 		"",
 		"--no-session-persistence",
 		"--max-turns",
-		"50",
+		"10",
 		prompt,
 	];
 }

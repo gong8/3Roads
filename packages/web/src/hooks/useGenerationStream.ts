@@ -7,6 +7,8 @@ interface StreamEvent {
   data: unknown;
 }
 
+type Phase = "idle" | "writing_tossups" | "saving_tossups" | "writing_bonuses" | "saving_bonuses";
+
 interface GenerationState {
   isStreaming: boolean;
   content: string;
@@ -17,6 +19,7 @@ interface GenerationState {
   savedBonuses: number;
   targetTossups: number;
   targetBonuses: number;
+  phase: Phase;
 }
 
 export function useGenerationStream() {
@@ -30,12 +33,13 @@ export function useGenerationStream() {
     savedBonuses: 0,
     targetTossups: 0,
     targetBonuses: 0,
+    phase: "idle",
   });
   const abortRef = useRef<AbortController | null>(null);
   const qc = useQueryClient();
 
-  const generate = useCallback(async (theme: string, tossupCount: number, bonusCount: number) => {
-    console.log("[3roads:gen]", "generate() called:", { theme, tossupCount, bonusCount });
+  const generate = useCallback(async (theme: string, tossupCount: number, bonusCount: number, difficulty: string) => {
+    console.log("[3roads:gen]", "generate() called:", { theme, tossupCount, bonusCount, difficulty });
 
     if (abortRef.current) {
       console.log("[3roads:gen]", "aborting previous generation");
@@ -55,10 +59,11 @@ export function useGenerationStream() {
       savedBonuses: 0,
       targetTossups: tossupCount,
       targetBonuses: bonusCount,
+      phase: tossupCount > 0 ? "writing_tossups" : "writing_bonuses",
     });
 
     try {
-      for await (const { event, data } of streamSSE("/api/generate/stream", { theme, tossupCount, bonusCount }, controller.signal)) {
+      for await (const { event, data } of streamSSE("/api/generate/stream", { theme, tossupCount, bonusCount, difficulty }, controller.signal)) {
         if (event === "done") {
           console.log("[3roads:gen]", "received done event, breaking");
           break;
@@ -87,6 +92,16 @@ export function useGenerationStream() {
             console.log("[3roads:gen]", "set created:", (parsed as { setId: string }).setId);
           }
 
+          // Track phase transitions from tool_call_start
+          if (event === "tool_call_start" && typeof parsed === "object" && parsed !== null) {
+            const toolName = (parsed as { toolName?: string }).toolName ?? "";
+            if (toolName.includes("save_tossups_batch")) {
+              newState.phase = "saving_tossups";
+            } else if (toolName.includes("save_bonuses_batch")) {
+              newState.phase = "saving_bonuses";
+            }
+          }
+
           // Track saved questions by counting tool_result events for save_ tools
           if (event === "tool_result" && typeof parsed === "object" && parsed !== null) {
             const toolCallId = (parsed as { toolCallId?: string }).toolCallId ?? "";
@@ -98,7 +113,14 @@ export function useGenerationStream() {
               const toolName = (matchingStart.data as { toolName?: string }).toolName ?? "";
               const isError = (parsed as { isError?: boolean }).isError;
               if (!isError) {
-                if (toolName.includes("save_tossup")) {
+                if (toolName.includes("save_tossups_batch")) {
+                  newState.savedTossups = s.targetTossups;
+                  newState.phase = s.targetBonuses > 0 ? "writing_bonuses" : s.phase;
+                  console.log("[3roads:gen]", `all tossups saved (${newState.savedTossups}/${s.targetTossups})`);
+                } else if (toolName.includes("save_bonuses_batch")) {
+                  newState.savedBonuses = s.targetBonuses;
+                  console.log("[3roads:gen]", `all bonuses saved (${newState.savedBonuses}/${s.targetBonuses})`);
+                } else if (toolName.includes("save_tossup")) {
                   newState.savedTossups = s.savedTossups + 1;
                   console.log("[3roads:gen]", `tossup saved (${newState.savedTossups}/${s.targetTossups})`);
                 } else if (toolName.includes("save_bonus")) {

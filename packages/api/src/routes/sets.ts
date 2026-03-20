@@ -103,13 +103,14 @@ setsRoutes.patch("/:id", async (c) => {
 	log.info(`PATCH /sets/${id} — request received`);
 	try {
 		const body = await c.req.json<{ name?: string; theme?: string; folderId?: string | null }>();
-		log.info(`PATCH /sets/${id} — params: name="${body.name}" theme="${body.theme}" folderId="${body.folderId}"`);
 		const db = getDb();
 
 		const data: Record<string, unknown> = {};
-		if (body.name) data.name = body.name;
-		if (body.theme) data.theme = body.theme;
+		if (body.name !== undefined) data.name = body.name;
+		if (body.theme !== undefined) data.theme = body.theme;
 		if ("folderId" in body) data.folderId = body.folderId ?? null;
+
+		log.info(`PATCH /sets/${id} — params: ${JSON.stringify(data)}`);
 
 		if (Object.keys(data).length === 0) {
 			log.warn(`PATCH /sets/${id} — nothing to update`);

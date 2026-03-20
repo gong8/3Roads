@@ -4,22 +4,26 @@ import { apiPost } from "../lib/api-client.js";
 
 const log = createLogger("mcp:tools");
 
+const bonusShape = {
+  leadin: z.string().describe("The bonus leadin text"),
+  part1Text: z.string().describe("Part 1 question text"),
+  part1Answer: z.string().describe("Part 1 answer"),
+  part2Text: z.string().describe("Part 2 question text"),
+  part2Answer: z.string().describe("Part 2 answer"),
+  part3Text: z.string().describe("Part 3 question text"),
+  part3Answer: z.string().describe("Part 3 answer"),
+  category: z.string().describe("Question category (e.g., Science, History)"),
+  subcategory: z.string().describe("Question subcategory"),
+  difficulty: z.string().describe("Difficulty level"),
+};
+
 export const bonusTools = {
   save_bonus: {
     description: "Save a quiz bowl bonus question to a set",
     parameters: {
       shape: {
         setId: z.string().describe("The question set ID"),
-        leadin: z.string().describe("The bonus leadin text"),
-        part1Text: z.string().describe("Part 1 question text"),
-        part1Answer: z.string().describe("Part 1 answer"),
-        part2Text: z.string().describe("Part 2 question text"),
-        part2Answer: z.string().describe("Part 2 answer"),
-        part3Text: z.string().describe("Part 3 question text"),
-        part3Answer: z.string().describe("Part 3 answer"),
-        category: z.string().describe("Question category (e.g., Science, History)"),
-        subcategory: z.string().describe("Question subcategory"),
-        difficulty: z.string().describe("Difficulty level"),
+        ...bonusShape,
       },
     },
     execute: async (params: {
@@ -42,6 +46,41 @@ export const bonusTools = {
         return result;
       } catch (error) {
         log.error(`save_bonus failed for set=${params.setId}`, error);
+        throw error;
+      }
+    },
+  },
+
+  save_bonuses_batch: {
+    description: "Save multiple quiz bowl bonus questions to a set in one call. Use this instead of calling save_bonus multiple times.",
+    parameters: {
+      shape: {
+        setId: z.string().describe("The question set ID"),
+        bonuses: z.array(z.object(bonusShape)).describe("Array of bonus objects to save"),
+      },
+    },
+    execute: async (params: {
+      setId: string;
+      bonuses: Array<{
+        leadin: string;
+        part1Text: string;
+        part1Answer: string;
+        part2Text: string;
+        part2Answer: string;
+        part3Text: string;
+        part3Answer: string;
+        category: string;
+        subcategory: string;
+        difficulty: string;
+      }>;
+    }) => {
+      log.info("save_bonuses_batch called", { setId: params.setId, count: params.bonuses.length });
+      try {
+        const result = await apiPost(`/sets/${params.setId}/bonuses/batch`, { bonuses: params.bonuses });
+        log.info(`save_bonuses_batch succeeded for set=${params.setId} count=${params.bonuses.length}`);
+        return result;
+      } catch (error) {
+        log.error(`save_bonuses_batch failed for set=${params.setId}`, error);
         throw error;
       }
     },

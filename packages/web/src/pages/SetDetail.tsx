@@ -63,33 +63,30 @@ export function SetDetail() {
         )}
       </div>
 
-      {filteredTossups.length > 0 && (
-        <div className="mb-6">
-          <h2 className="font-bold mb-2">tossups ({filteredTossups.length})</h2>
-          {filteredTossups.map((t) => (
-            <TossupBlock
-              key={t.id}
-              {...t}
-              showAnswer={mode === "review" || revealedTossups.has(t.id)}
-              onToggleAnswer={() => setRevealedTossups((s) => new Set(s).add(t.id))}
-            />
-          ))}
-        </div>
-      )}
-
-      {filteredBonuses.length > 0 && (
-        <div>
-          <h2 className="font-bold mb-2">bonuses ({filteredBonuses.length})</h2>
-          {filteredBonuses.map((b) => (
-            <BonusBlock
-              key={b.id}
-              {...b}
-              showAnswers={mode === "review" || revealedBonuses.has(b.id)}
-              onToggleAnswers={() => setRevealedBonuses((s) => new Set(s).add(b.id))}
-            />
-          ))}
-        </div>
-      )}
+      {(() => {
+        const maxPairs = Math.max(filteredTossups.length, filteredBonuses.length);
+        return Array.from({ length: maxPairs }, (_, i) => (
+          <div key={i} className="mb-6 pb-4 border-b border-gray-300 last:border-b-0">
+            <div className="text-xs text-gray-400 mb-2">{i + 1}.</div>
+            {filteredTossups[i] && (
+              <TossupBlock
+                {...filteredTossups[i]}
+                showAnswer={mode === "review" || revealedTossups.has(filteredTossups[i].id)}
+                onToggleAnswer={() => setRevealedTossups((s) => new Set(s).add(filteredTossups[i].id))}
+              />
+            )}
+            {filteredBonuses[i] && (
+              <div className="mt-3">
+                <BonusBlock
+                  {...filteredBonuses[i]}
+                  showAnswers={mode === "review" || revealedBonuses.has(filteredBonuses[i].id)}
+                  onToggleAnswers={() => setRevealedBonuses((s) => new Set(s).add(filteredBonuses[i].id))}
+                />
+              </div>
+            )}
+          </div>
+        ));
+      })()}
     </div>
   );
 }

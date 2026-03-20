@@ -1,7 +1,9 @@
-import { serve } from "@hono/node-server";
+import { createServer } from "node:http";
+import { getRequestListener } from "@hono/node-server";
 import { createLogger, getDb, initDb } from "@3roads/shared";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { attachGameWebSocket, getActiveRoomsList } from "./game/index.js";
 import { foldersRoutes } from "./routes/folders.js";
 import { generateRoutes } from "./routes/generate.js";
 import { questionsRoutes } from "./routes/questions.js";
@@ -76,10 +78,19 @@ app.delete("/bonuses/:id", async (c) => {
 	}
 });
 
+app.get("/game/rooms", (c) => c.json(getActiveRoomsList()));
+
 app.get("/", (c) => c.json({ name: "3roads-api", version: "0.0.1" }));
 
 const port = Number(process.env.PORT) || 7001;
 
-serve({ fetch: app.fetch, port }, () => {
+// Create HTTP server manually so we can attach WebSocket upgrade handler
+// before the Hono request listener (which would 404 on /ws and close the socket)
+const server = createServer(getRequestListener(app.fetch));
+
+// Attach WebSocket BEFORE server.listen so upgrade handler is registered first
+attachGameWebSocket(server);
+
+server.listen(port, () => {
 	log.info(`3Roads API running on http://localhost:${port}`);
 });
