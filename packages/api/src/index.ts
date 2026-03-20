@@ -2,6 +2,7 @@ import { serve } from "@hono/node-server";
 import { createLogger, getDb, initDb } from "@3roads/shared";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { foldersRoutes } from "./routes/folders.js";
 import { generateRoutes } from "./routes/generate.js";
 import { questionsRoutes } from "./routes/questions.js";
 import { setsRoutes } from "./routes/sets.js";
@@ -25,6 +26,7 @@ app.onError((err, c) => {
 
 app.route("/generate", generateRoutes);
 app.route("/sets", setsRoutes);
+app.route("/folders", foldersRoutes);
 app.route("/questions", questionsRoutes);
 
 // Mount tossup/bonus deletion at root level
