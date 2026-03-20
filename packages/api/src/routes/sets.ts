@@ -97,18 +97,19 @@ setsRoutes.post("/", async (c) => {
 	}
 });
 
-// Update name/theme
+// Update name/theme/folderId
 setsRoutes.patch("/:id", async (c) => {
 	const { id } = c.req.param();
 	log.info(`PATCH /sets/${id} — request received`);
 	try {
-		const body = await c.req.json<{ name?: string; theme?: string }>();
-		log.info(`PATCH /sets/${id} — params: name="${body.name}" theme="${body.theme}"`);
+		const body = await c.req.json<{ name?: string; theme?: string; folderId?: string | null }>();
+		log.info(`PATCH /sets/${id} — params: name="${body.name}" theme="${body.theme}" folderId="${body.folderId}"`);
 		const db = getDb();
 
-		const data: Record<string, string> = {};
+		const data: Record<string, unknown> = {};
 		if (body.name) data.name = body.name;
 		if (body.theme) data.theme = body.theme;
+		if ("folderId" in body) data.folderId = body.folderId ?? null;
 
 		if (Object.keys(data).length === 0) {
 			log.warn(`PATCH /sets/${id} — nothing to update`);
@@ -194,6 +195,150 @@ setsRoutes.post("/:setId/tossups", async (c) => {
 		const message = err instanceof Error ? err.message : String(err);
 		const stack = err instanceof Error ? err.stack : undefined;
 		log.error(`POST /sets/${setId}/tossups — error: ${message}`, stack ?? err);
+		return c.json({ error: message }, 500);
+	}
+});
+
+// Batch save tossups to a set
+setsRoutes.post("/:setId/tossups/batch", async (c) => {
+	const { setId } = c.req.param();
+	log.info(`POST /sets/${setId}/tossups/batch — request received`);
+	try {
+		const { tossups } = await c.req.json<{
+			tossups: Array<{
+				question: string;
+				answer: string;
+				powerMarkIndex?: number;
+				category: string;
+				subcategory: string;
+				difficulty: string;
+			}>;
+		}>();
+		const db = getDb();
+
+		const set = await db.questionSet.findUnique({ where: { id: setId } });
+		if (!set) {
+			log.warn(`POST /sets/${setId}/tossups/batch — set not found`);
+			return c.json({ error: "Set not found" }, 404);
+		}
+
+		if (!Array.isArray(tossups) || tossups.length === 0) {
+			log.warn(`POST /sets/${setId}/tossups/batch — empty or missing tossups array`);
+			return c.json({ error: "tossups array is required and must not be empty" }, 400);
+		}
+
+		for (const t of tossups) {
+			if (!t.question || !t.answer || !t.category || !t.subcategory || !t.difficulty) {
+				log.warn(`POST /sets/${setId}/tossups/batch — missing required fields in tossup`);
+				return c.json({ error: "Each tossup requires question, answer, category, subcategory, and difficulty" }, 400);
+			}
+		}
+
+		const results = await db.$transaction(async (tx) => {
+			await tx.tossup.createMany({
+				data: tossups.map((t) => ({
+					setId,
+					question: t.question,
+					answer: t.answer,
+					powerMarkIndex: t.powerMarkIndex ?? null,
+					category: t.category,
+					subcategory: t.subcategory,
+					difficulty: t.difficulty,
+				})),
+			});
+			return tx.tossup.findMany({
+				where: { setId },
+				orderBy: { createdAt: "asc" },
+			});
+		});
+
+		log.info(`POST /sets/${setId}/tossups/batch — created ${tossups.length} tossups`);
+		return c.json(results, 201);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		const stack = err instanceof Error ? err.stack : undefined;
+		log.error(`POST /sets/${setId}/tossups/batch — error: ${message}`, stack ?? err);
+		return c.json({ error: message }, 500);
+	}
+});
+
+// Batch save bonuses to a set
+setsRoutes.post("/:setId/bonuses/batch", async (c) => {
+	const { setId } = c.req.param();
+	log.info(`POST /sets/${setId}/bonuses/batch — request received`);
+	try {
+		const { bonuses } = await c.req.json<{
+			bonuses: Array<{
+				leadin: string;
+				part1Text: string;
+				part1Answer: string;
+				part2Text: string;
+				part2Answer: string;
+				part3Text: string;
+				part3Answer: string;
+				category: string;
+				subcategory: string;
+				difficulty: string;
+			}>;
+		}>();
+		const db = getDb();
+
+		const set = await db.questionSet.findUnique({ where: { id: setId } });
+		if (!set) {
+			log.warn(`POST /sets/${setId}/bonuses/batch — set not found`);
+			return c.json({ error: "Set not found" }, 404);
+		}
+
+		if (!Array.isArray(bonuses) || bonuses.length === 0) {
+			log.warn(`POST /sets/${setId}/bonuses/batch — empty or missing bonuses array`);
+			return c.json({ error: "bonuses array is required and must not be empty" }, 400);
+		}
+
+		for (const b of bonuses) {
+			if (
+				!b.leadin ||
+				!b.part1Text || !b.part1Answer ||
+				!b.part2Text || !b.part2Answer ||
+				!b.part3Text || !b.part3Answer ||
+				!b.category || !b.subcategory || !b.difficulty
+			) {
+				log.warn(`POST /sets/${setId}/bonuses/batch — missing required fields in bonus`);
+				return c.json({ error: "Each bonus requires leadin, all 3 parts (text + answer), category, subcategory, and difficulty" }, 400);
+			}
+		}
+
+		const results = await db.$transaction(async (tx) => {
+			for (const b of bonuses) {
+				const bonus = await tx.bonus.create({
+					data: {
+						setId,
+						leadin: b.leadin,
+						category: b.category,
+						subcategory: b.subcategory,
+						difficulty: b.difficulty,
+					},
+				});
+				await tx.bonusPart.createMany({
+					data: [
+						{ bonusId: bonus.id, partNum: 1, text: b.part1Text, answer: b.part1Answer, value: 10 },
+						{ bonusId: bonus.id, partNum: 2, text: b.part2Text, answer: b.part2Answer, value: 10 },
+						{ bonusId: bonus.id, partNum: 3, text: b.part3Text, answer: b.part3Answer, value: 10 },
+					],
+				});
+			}
+			return tx.bonus.findMany({
+				where: { setId },
+				orderBy: { createdAt: "asc" },
+				include: { parts: { orderBy: { partNum: "asc" } } },
+			});
+		});
+
+		log.info(`POST /sets/${setId}/bonuses/batch — created ${bonuses.length} bonuses`);
+		return c.json(results, 201);
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		const stack = err instanceof Error ? err.stack : undefined;
+		log.error(`POST /sets/${setId}/bonuses/batch — error: ${message}`, stack ?? err);
 		return c.json({ error: message }, 500);
 	}
 });
