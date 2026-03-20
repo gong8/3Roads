@@ -8,13 +8,17 @@ generator client {
 }
 
 model QuestionSet {
-  id        String   @id @default(cuid())
-  name      String
-  theme     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tossups   Tossup[]
-  bonuses   Bonus[]
+  id         String   @id @default(cuid())
+  name       String
+  theme      String
+  difficulty String   @default("Regular High School")
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  folderId   String?
+  folder     Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  tossups    Tossup[]
+  bonuses    Bonus[]
+  @@index([folderId])
 }
 
 model Tossup {
@@ -56,4 +60,12 @@ model BonusPart {
   value   Int    @default(10)
   @@index([bonusId])
   @@unique([bonusId, partNum])
+}
+
+model Folder {
+  id        String       @id @default(cuid())
+  name      String       @unique
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  sets      QuestionSet[]
 }
