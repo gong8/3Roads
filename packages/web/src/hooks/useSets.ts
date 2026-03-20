@@ -1,14 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiDelete } from "../lib/api";
+import { apiGet, apiDelete, apiPatch } from "../lib/api";
 
 // Types
 interface QuestionSet {
   id: string;
   name: string;
   theme: string;
+  difficulty: string;
   createdAt: string;
   updatedAt: string;
-  _count?: { tossups: number; bonuses: number };
+  folderId: string | null;
+  tossupCount?: number;
+  bonusCount?: number;
   tossups?: Tossup[];
   bonuses?: Bonus[];
 }
@@ -62,5 +65,17 @@ export function useDeleteSet() {
   return useMutation({
     mutationFn: (id: string) => apiDelete(`/sets/${id}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sets"] }),
+  });
+}
+
+export function useUpdateSet() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...data }: { id: string; folderId?: string | null }) =>
+      apiPatch<QuestionSet>(`/sets/${id}`, data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["sets"] });
+      qc.invalidateQueries({ queryKey: ["folders"] });
+    },
   });
 }
