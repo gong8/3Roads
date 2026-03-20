@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { createLogger } from "@3roads/shared";
 import { LineBuffer } from "./line-buffer.js";
 
-const log = createLogger("api");
+const log = createLogger("api:cli");
 
 const BASE_TEMP_DIR = join(tmpdir(), "3roads-cli");
-const MCP_URL = process.env.MCP_URL || "http://127.0.0.1:3001/mcp";
+const MCP_URL = process.env.MCP_URL || "http://127.0.0.1:7002/mcp";
 const LLM_MODEL = process.env.LLM_MODEL || "sonnet";
 
 const SYSTEM_PROMPT_SUFFIX = [
@@ -57,6 +57,7 @@ function getCliModel(model: string): string {
 function createInvocationDir(): string {
 	const dir = join(BASE_TEMP_DIR, randomUUID().slice(0, 12));
 	mkdirSync(dir, { recursive: true });
+	log.debug(`prepareInvocation — temp dir: ${dir}`);
 	return dir;
 }
 
@@ -70,11 +71,15 @@ function writeMcpConfig(dir: string): string {
 	const servers: Record<string, unknown> = {
 		"3roads": { type: "http", url: MCP_URL },
 	};
-	return writeTempFile(dir, "mcp-config.json", JSON.stringify({ mcpServers: servers }));
+	const path = writeTempFile(dir, "mcp-config.json", JSON.stringify({ mcpServers: servers }));
+	log.debug(`prepareInvocation — MCP config: ${path}`);
+	return path;
 }
 
 function writeSystemPrompt(dir: string, content: string): string {
-	return writeTempFile(dir, "system-prompt.txt", content + SYSTEM_PROMPT_SUFFIX);
+	const path = writeTempFile(dir, "system-prompt.txt", content + SYSTEM_PROMPT_SUFFIX);
+	log.debug(`prepareInvocation — system prompt: ${path}`);
+	return path;
 }
 
 export interface CliChatOptions {
@@ -171,6 +176,7 @@ function createStreamParser(emitSSE: SSEEmitter) {
 			const toolCallId = (block.id as string) || `tool_${index}`;
 			const toolName = (block.name as string) || "unknown";
 			toolCalls.set(index, { id: toolCallId, name: toolName, argsJson: "" });
+			log.info(`createStreamParser — tool_call_start: ${toolName} (${toolCallId})`);
 			emitSSE("tool_call_start", JSON.stringify({ toolCallId, toolName }));
 		} else if (blockType === "thinking") {
 			blockTypes.set(index, "thinking");
@@ -201,13 +207,16 @@ function createStreamParser(emitSSE: SSEEmitter) {
 		let args: Record<string, unknown> = {};
 		try {
 			args = tc.argsJson ? JSON.parse(tc.argsJson) : {};
-		} catch {
-			log.warn(`Failed to parse tool call args for ${tc.name}`);
+		} catch (err) {
+			log.warn(`Failed to parse tool call args for ${tc.name}: ${err instanceof Error ? err.message : err} — raw: ${tc.argsJson.slice(0, 200)}`);
 		}
+		log.info(`createStreamParser — tool_call_complete: ${tc.name} (${tc.id})`);
+		log.debug(`createStreamParser — tool_call_args: ${JSON.stringify(args).slice(0, 500)}`);
 		emitSSE("tool_call_args", JSON.stringify({ toolCallId: tc.id, toolName: tc.name, args }));
 	}
 
 	function processEvent(event: Record<string, unknown>): void {
+		log.debug(`createStreamParser — event type: ${event.type as string}`);
 		const index = event.index as number;
 		const block =
 			event.type === "content_block_start"
@@ -236,13 +245,11 @@ function createStreamParser(emitSSE: SSEEmitter) {
 }
 
 function spawnCli(args: string[], cwd: string): ChildProcessWithoutNullStreams {
+	log.info(`spawnCli — claude ${args.join(" ")}`);
 	return spawn("claude", args, {
 		cwd,
 		env: {
-			PATH: process.env.PATH,
-			HOME: process.env.HOME,
-			SHELL: process.env.SHELL,
-			TERM: process.env.TERM,
+			...process.env,
 		},
 		stdio: ["pipe", "pipe", "pipe"],
 	});
@@ -252,6 +259,7 @@ function pipeStdout(
 	proc: ChildProcessWithoutNullStreams,
 	parser: ReturnType<typeof createStreamParser>,
 	startMs: number,
+	emit: SSEEmitter,
 ): void {
 	const lineBuffer = new LineBuffer();
 
@@ -260,10 +268,13 @@ function pipeStdout(
 			const trimmed = line.trim();
 			if (!trimmed) continue;
 
+			log.debug(`pipeStdout — raw NDJSON: ${trimmed.slice(0, 500)}`);
+
 			let msg: Record<string, unknown>;
 			try {
 				msg = JSON.parse(trimmed);
-			} catch {
+			} catch (err) {
+				log.warn(`pipeStdout — JSON parse error: ${err instanceof Error ? err.message : err} — line: ${trimmed.slice(0, 200)}`);
 				continue;
 			}
 
@@ -273,6 +284,11 @@ function pipeStdout(
 				const elapsed = (performance.now() - startMs).toFixed(0);
 				const cost = msg.cost_usd ? `$${(msg.cost_usd as number).toFixed(4)}` : "n/a";
 				log.info(`cli-chat DONE — ${elapsed}ms, ${msg.num_turns ?? "?"} turns, cost=${cost}`);
+				if (msg.is_error) {
+					const errMsg = (msg.result as string) || "CLI returned an error";
+					log.error(`cli-chat result error: ${errMsg}`);
+					emit("error", JSON.stringify({ error: errMsg }));
+				}
 			}
 		}
 	});
@@ -281,8 +297,8 @@ function pipeStdout(
 function cleanupDir(dir: string): void {
 	try {
 		rmSync(dir, { recursive: true, force: true });
-	} catch {
-		// best-effort cleanup
+	} catch (err) {
+		log.warn(`cleanupDir — failed to remove ${dir}: ${err instanceof Error ? err.message : err}`);
 	}
 }
 
@@ -312,7 +328,7 @@ function wireProcessLifecycle(
 		emitSSE("done", "[DONE]");
 	};
 
-	pipeStdout(proc, parser, startMs);
+	pipeStdout(proc, parser, startMs, emitSSE);
 
 	proc.stderr?.on("data", (chunk: Buffer) => {
 		const text = chunk.toString().trim();
@@ -327,7 +343,7 @@ function wireProcessLifecycle(
 	});
 
 	proc.on("error", (err) => {
-		log.error(`cli-chat process error: ${err.message}`);
+		log.error(`cli-chat process error: ${err.message}`, err);
 		finalize(err.message);
 		cleanupDir(invocationDir);
 	});
@@ -361,17 +377,20 @@ export function streamCliChat(options: CliChatOptions): ReadableStream<Uint8Arra
 				options.prompt,
 			);
 
+			log.debug(`prepareInvocation — CLI args: claude ${args.join(" ")}`);
+
 			const startMs = performance.now();
 			log.info(
 				`cli-chat START — model=${model} mcp=${MCP_URL} prompt=${options.prompt.length} chars`,
 			);
+			log.debug(`streamCliChat — ReadableStream started`);
 
 			let proc: ChildProcessWithoutNullStreams;
 			try {
 				proc = spawnCli(args, invocationDir);
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : "Unknown spawn error";
-				log.error(`cli-chat spawn failed: ${msg}`);
+				log.error(`cli-chat spawn failed: ${msg}`, err);
 				emit("error", JSON.stringify({ error: msg }));
 				emit("done", "[DONE]");
 				close();

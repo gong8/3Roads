@@ -1,5 +1,8 @@
+import { createLogger } from "@3roads/shared";
 import { z } from "zod";
 import { apiPost } from "../lib/api-client.js";
+
+const log = createLogger("mcp:tools");
 
 export const bonusTools = {
   save_bonus: {
@@ -32,7 +35,15 @@ export const bonusTools = {
       subcategory: string;
       difficulty: string;
     }) => {
-      return apiPost(`/sets/${params.setId}/bonuses`, params);
+      log.info("save_bonus called", { setId: params.setId, category: params.category });
+      try {
+        const result = await apiPost(`/sets/${params.setId}/bonuses`, params);
+        log.info(`save_bonus succeeded for set=${params.setId} category=${params.category}`);
+        return result;
+      } catch (error) {
+        log.error(`save_bonus failed for set=${params.setId}`, error);
+        throw error;
+      }
     },
   },
 };

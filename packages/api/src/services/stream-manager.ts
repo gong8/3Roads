@@ -1,7 +1,7 @@
 import { createLogger } from "@3roads/shared";
 import { LineBuffer } from "./line-buffer.js";
 
-const log = createLogger("api");
+const log = createLogger("api:stream");
 
 interface BufferedEvent {
 	event: string;
@@ -47,8 +47,8 @@ function createEmitter(stream: ActiveStream): (event: string, data: string) => v
 		for (const cb of stream.subscribers) {
 			try {
 				cb(event, data);
-			} catch {
-				// subscriber errored, ignore
+			} catch (err) {
+				log.warn(`stream-manager — subscriber callback error for set ${stream.setId}: ${err instanceof Error ? err.message : err}`);
 			}
 		}
 	};
@@ -83,9 +83,10 @@ async function consumeStream(
 
 				try {
 					const obj = JSON.parse(parsed.data);
+					log.debug(`consumeStream [${stream.setId}] — SSE event: ${parsed.type}`);
 					emit(parsed.type, JSON.stringify(obj));
-				} catch {
-					// Skip unparseable
+				} catch (err) {
+					log.warn(`consumeStream [${stream.setId}] — unparseable SSE data: ${err instanceof Error ? err.message : err} — raw: ${parsed.data.slice(0, 200)}`);
 				}
 			}
 		}
@@ -97,6 +98,7 @@ async function consumeStream(
 	}
 
 	stream.status = status;
+	log.info(`consumeStream [${stream.setId}] — finished with status=${status}, total events=${stream.events.length}`);
 	if (status === "error") {
 		emit("error", JSON.stringify({ error: "Stream failed" }));
 	}
@@ -151,8 +153,8 @@ function createEventQueue(cb: Subscriber, onDrained: () => void) {
 			if (!evt) break;
 			try {
 				await cb(evt.event, evt.data);
-			} catch {
-				// subscriber errored, ignore
+			} catch (err) {
+				log.warn(`createEventQueue — subscriber callback error: ${err instanceof Error ? err.message : err}`);
 			}
 		}
 		draining = false;
@@ -175,7 +177,10 @@ function createEventQueue(cb: Subscriber, onDrained: () => void) {
 
 export function subscribe(setId: string, cb: Subscriber): SubscribeHandle | null {
 	const stream = activeStreams.get(setId);
-	if (!stream) return null;
+	if (!stream) {
+		log.warn(`subscribe — no active stream found for set ${setId}`);
+		return null;
+	}
 
 	let resolveDelivered: () => void;
 	const delivered = new Promise<void>((resolve) => {
@@ -186,9 +191,12 @@ export function subscribe(setId: string, cb: Subscriber): SubscribeHandle | null
 		if (stream.status !== "streaming" && eq.isEmpty) resolveDelivered();
 	});
 
+	const replayCount = stream.events.length;
 	for (const { event, data } of stream.events) {
 		eq.enqueue(event, data);
 	}
+
+	log.info(`subscribe [${setId}] — new subscriber, replaying ${replayCount} buffered events, stream status=${stream.status}`);
 
 	if (stream.status === "streaming") {
 		stream.subscribers.add(eq.enqueue);

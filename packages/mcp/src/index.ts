@@ -8,7 +8,7 @@ import { setTools } from "./tools/sets.js";
 import { tossupTools } from "./tools/tossups.js";
 
 const log = createLogger("mcp");
-const MCP_PORT = Number(process.env.MCP_PORT) || 3001;
+const MCP_PORT = Number(process.env.MCP_PORT) || 7002;
 
 const server = new McpServer({
   name: "3roads",
@@ -48,18 +48,19 @@ registerTools(searchTools);
 
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${MCP_PORT}`);
+  log.debug(`HTTP ${req.method} ${url.pathname}`);
 
   if (url.pathname === "/mcp") {
-    log.debug(`HTTP ${req.method} /mcp`);
     try {
       await server.close();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
       await server.connect(transport);
+      log.debug("MCP transport connected");
       await transport.handleRequest(req, res);
     } catch (err) {
-      log.error("MCP request failed", err);
+      log.error("MCP transport/request failed", err);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: "Internal server error" }));
@@ -74,8 +75,17 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
+  log.warn(`404 Not Found: ${req.method} ${url.pathname}`);
   res.writeHead(404);
   res.end("Not found");
+});
+
+httpServer.on("error", (err) => {
+  log.error("HTTP server error", err);
+});
+
+httpServer.on("clientError", (err) => {
+  log.error("HTTP client connection error", err);
 });
 
 httpServer.listen(MCP_PORT, "127.0.0.1", () => {

@@ -1,17 +1,27 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useGenerationStream } from "../hooks/useGenerationStream";
 
 export function Generate() {
   const [theme, setTheme] = useState("");
   const [tossupCount, setTossupCount] = useState(5);
   const [bonusCount, setBonusCount] = useState(5);
-  const { isStreaming, content, error, generate, stop } = useGenerationStream();
+  const {
+    isStreaming, content, error, setId,
+    savedTossups, savedBonuses, targetTossups, targetBonuses,
+    generate, stop,
+  } = useGenerationStream();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!theme.trim()) return;
+    console.log("[3roads:ui]", "form submitted:", { theme: theme.trim(), tossupCount, bonusCount });
     generate(theme.trim(), tossupCount, bonusCount);
   };
+
+  const totalTarget = targetTossups + targetBonuses;
+  const totalSaved = savedTossups + savedBonuses;
+  const isDone = !isStreaming && totalSaved > 0;
 
   return (
     <div>
@@ -75,9 +85,33 @@ export function Generate() {
 
       {error && <p className="text-red-600 mb-4">error: {error}</p>}
 
-      {content && (
+      {(isStreaming || isDone) && (
         <div className="border-t border-black pt-4">
-          <pre className="whitespace-pre-wrap font-mono text-sm">{content}</pre>
+          <div className="mb-3 text-sm text-gray-600">
+            {isStreaming ? "generating" : "done"} — tossups: {savedTossups}/{targetTossups}, bonuses: {savedBonuses}/{targetBonuses}
+            {totalTarget > 0 && (
+              <span className="ml-2">({Math.round((totalSaved / totalTarget) * 100)}%)</span>
+            )}
+          </div>
+
+          {totalTarget > 0 && (
+            <div className="mb-4 h-1 bg-gray-200">
+              <div
+                className="h-1 bg-black transition-all duration-300"
+                style={{ width: `${Math.round((totalSaved / totalTarget) * 100)}%` }}
+              />
+            </div>
+          )}
+
+          {isDone && setId && (
+            <p className="mb-4">
+              <Link to={`/sets/${setId}`} className="underline">view set</Link>
+            </p>
+          )}
+
+          {content && (
+            <pre className="whitespace-pre-wrap font-mono text-sm">{content}</pre>
+          )}
         </div>
       )}
     </div>

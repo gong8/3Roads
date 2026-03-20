@@ -2,19 +2,19 @@
   "name": "3roads",
   "private": true,
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "pnpm kill && turbo dev",
     "build": "turbo build",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "typecheck": "turbo typecheck",
-    "kill": "for p in 8787 5173 3001; do lsof -ti :$p | xargs kill -9 2>/dev/null; done; echo 'Killed ports 8787, 5173, 3001'"
+    "kill": "for p in 7001 7002 7003; do lsof -ti :$p | xargs kill -9 2>/dev/null; done; echo 'Killed ports 7001, 7002, 7003'"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.0.0",
     "prisma": "^6.3.1",
-    "turbo": "^2.4.4",
+    "turbo": "^2.8.9",
     "typescript": "^5.9.0"
   },
   "dependencies": {
