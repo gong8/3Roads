@@ -39,7 +39,10 @@ export function Browse() {
 
   const handleRenameFolder = (id: string) => {
     const trimmed = editName.trim();
-    if (!trimmed) return;
+    if (!trimmed) {
+      setEditingFolder(null);
+      return;
+    }
     updateFolder.mutate({ id, name: trimmed });
     setEditingFolder(null);
   };
@@ -78,7 +81,10 @@ export function Browse() {
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 onBlur={() => handleRenameFolder(f.id)}
-                onKeyDown={(e) => e.key === "Enter" && handleRenameFolder(f.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleRenameFolder(f.id);
+                  if (e.key === "Escape") setEditingFolder(null);
+                }}
                 autoFocus
               />
             ) : (

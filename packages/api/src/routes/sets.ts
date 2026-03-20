@@ -125,6 +125,9 @@ setsRoutes.patch("/:id", async (c) => {
 		return c.json(set);
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
+		if (message.includes("P2025")) {
+			return c.json({ error: "Set not found" }, 404);
+		}
 		const stack = err instanceof Error ? err.stack : undefined;
 		log.error(`PATCH /sets/${id} — error: ${message}`, stack ?? err);
 		return c.json({ error: message }, 500);
