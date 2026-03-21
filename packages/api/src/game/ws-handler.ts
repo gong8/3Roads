@@ -57,6 +57,12 @@ export async function handleConnection(ws: WebSocket): Promise<void> {
 						playerName: player.name,
 					});
 					broadcastPlayerList(room);
+					// Cancel TTS pregeneration if no players remain in lobby
+					if (room.players.size === 0 && room.phase === "lobby" && room.ttsAbort) {
+						log.info(`Room ${ctx.roomCode} — cancelling TTS pregeneration (no players)`);
+						room.ttsAbort.abort();
+						room.ttsAbort = null;
+					}
 				}
 			}
 			wsContext.delete(ws);

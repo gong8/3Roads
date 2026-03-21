@@ -90,6 +90,9 @@ function shuffle<T>(arr: T[]): T[] {
 export async function pregenerateTTS(room: GameRoom): Promise<void> {
 	if (!room.settings.ttsEnabled) return;
 
+	const abort = new AbortController();
+	room.ttsAbort = abort;
+
 	try {
 		log.info(`Room ${room.code} — pregenerating TTS audio...`);
 		const texts: { key: string; text: string }[] = [];
@@ -106,12 +109,21 @@ export async function pregenerateTTS(room: GameRoom): Promise<void> {
 		broadcast(room, { type: "tts_progress", current: 0, total: texts.length });
 		const startTime = Date.now();
 		let completed = 0;
+		let failed = 0;
 		await Promise.all(
 			texts.map(async ({ key, text }) => {
-				const words = text.split(/\s+/);
-				const { audio, durationMs, wordDelays } = await generateTTS(text, words);
-				const audioId = storeAudio(audio);
-				room.ttsCache.set(key, { audioId, durationMs, wordDelays });
+				if (abort.signal.aborted) return;
+				try {
+					const words = text.split(/\s+/);
+					const { audio, durationMs, wordDelays } = await generateTTS(text, words);
+					if (abort.signal.aborted) return;
+					const audioId = storeAudio(audio);
+					room.ttsCache.set(key, { audioId, durationMs, wordDelays });
+				} catch (err) {
+					if (abort.signal.aborted) return;
+					failed++;
+					log.warn(`Room ${room.code} — TTS failed for "${key}": ${err instanceof Error ? err.message : err}`);
+				}
 				completed++;
 				const elapsed = Date.now() - startTime;
 				const avgMs = elapsed / completed;
@@ -119,7 +131,9 @@ export async function pregenerateTTS(room: GameRoom): Promise<void> {
 				broadcast(room, { type: "tts_progress", current: completed, total: texts.length, etaMs });
 			}),
 		);
-		log.info(`Room ${room.code} — TTS pregeneration complete (${texts.length} clips)`);
+		if (!abort.signal.aborted) {
+			log.info(`Room ${room.code} — TTS pregeneration complete (${texts.length - failed}/${texts.length} clips)`);
+		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		log.warn(`Room ${room.code} — TTS pregeneration failed, disabling: ${msg}`);

@@ -7,7 +7,6 @@ const MODEL_DIR: string = workerData.modelDir;
 const SAMPLE_RATE = 24000;
 const STYLE_DIM = 256;
 const MAX_STYLE_ROWS = 510;
-const DURATION_DIVISOR = 80; // frames → seconds: duration / 80
 
 // -- Load tokens.txt into a char→ID map --
 
@@ -139,7 +138,7 @@ async function init() {
 	const voiceData = loadVoice(resolve(MODEL_DIR, "af_heart.bin"));
 
 	const session = await ort.InferenceSession.create(
-		resolve(MODEL_DIR, "model_quantized.onnx"),
+		resolve(MODEL_DIR, "model.onnx"),
 		{
 			executionProviders: ["cpu"],
 			interOpNumThreads: 1,
@@ -147,79 +146,143 @@ async function init() {
 		},
 	);
 
+	// Max phoneme tokens per chunk (model max is 512, minus 2 for BOS/EOS padding)
+	const MAX_PHONEME_TOKENS = 510;
+
+	// Phonemize a list of words, returning per-word phoneme strings
+	async function phonemizeWords(words: string[]): Promise<string[]> {
+		const result: string[] = [];
+		for (const word of words) {
+			const r = await phonemize(word, "en-us");
+			const ph = (Array.isArray(r) ? r[0] : r) || "";
+			result.push(ph.trim());
+		}
+		return result;
+	}
+
+	// Run inference on a single chunk of phonemes, returning audio samples + durations
+	async function generateChunk(
+		chunkPhonemes: string,
+	): Promise<{ samples: Float32Array; predDur: Float32Array | null }> {
+		const tokenIds = tokenize(chunkPhonemes, vocab);
+		const numPhonemeTokens = tokenIds.length - 2;
+		const style = getStyleVector(voiceData, numPhonemeTokens);
+
+		const inputIds = new ort.Tensor(
+			"int64",
+			BigInt64Array.from(tokenIds.map(BigInt)),
+			[1, tokenIds.length],
+		);
+		const styleTensor = new ort.Tensor("float32", style, [1, STYLE_DIM]);
+		const speedTensor = new ort.Tensor("float32", new Float32Array([1.0]), [1]);
+
+		const results = await session.run({
+			input_ids: inputIds,
+			style: styleTensor,
+			speed: speedTensor,
+		});
+
+		const outputNames = Object.keys(results);
+		const audioOutput = results["waveform"] ?? results["audio"] ?? results[outputNames[0]];
+		const durOutput = results["pred_dur"] ?? results["durations"] ?? results[outputNames[1]];
+
+		return {
+			samples: audioOutput.data as Float32Array,
+			predDur: durOutput?.data as Float32Array ?? null,
+		};
+	}
+
+	// Split words into chunks that fit within MAX_PHONEME_TOKENS
+	function splitIntoChunks(
+		wordPhonemes: string[],
+	): { wordIndices: number[]; phonemes: string; charCounts: number[] }[] {
+		const chunks: { wordIndices: number[]; phonemes: string; charCounts: number[] }[] = [];
+		let currentWords: number[] = [];
+		let currentPhonemes: string[] = [];
+		let currentTokenCount = 0;
+
+		for (let i = 0; i < wordPhonemes.length; i++) {
+			const ph = wordPhonemes[i];
+			const charCount = [...ph].length;
+			// +1 for space token between words (except first word in chunk)
+			const addedTokens = charCount + (currentPhonemes.length > 0 ? 1 : 0);
+
+			if (currentTokenCount + addedTokens > MAX_PHONEME_TOKENS && currentPhonemes.length > 0) {
+				// Flush current chunk
+				chunks.push({
+					wordIndices: [...currentWords],
+					phonemes: currentPhonemes.join(" "),
+					charCounts: currentWords.map((idx) => [...wordPhonemes[idx]].length),
+				});
+				currentWords = [];
+				currentPhonemes = [];
+				currentTokenCount = 0;
+			}
+
+			currentWords.push(i);
+			currentPhonemes.push(ph);
+			currentTokenCount += charCount + (currentPhonemes.length > 1 ? 1 : 0);
+		}
+
+		// Flush remaining
+		if (currentPhonemes.length > 0) {
+			chunks.push({
+				wordIndices: [...currentWords],
+				phonemes: currentPhonemes.join(" "),
+				charCounts: currentWords.map((idx) => [...wordPhonemes[idx]].length),
+			});
+		}
+
+		return chunks;
+	}
+
 	parentPort!.postMessage({ type: "ready" });
 
 	parentPort!.on("message", async (msg: { id: number; text: string; words: string[] }) => {
 		try {
-			const { id, text, words } = msg;
+			const { id, words } = msg;
 
-			// Step 1: Phonemize each word separately to track per-word phoneme counts
-			let phonemeCharCounts: number[] | null = null;
-			let joinedPhonemes: string;
+			// Step 1: Phonemize each word
+			const wordPhonemes = await phonemizeWords(words);
 
-			try {
-				const wordPhonemes: string[] = [];
-				for (const word of words) {
-					const result = await phonemize(word, "en-us");
-					const ph = (Array.isArray(result) ? result[0] : result) || "";
-					wordPhonemes.push(ph.trim());
-				}
-				phonemeCharCounts = wordPhonemes.map((p) => [...p].length);
-				joinedPhonemes = wordPhonemes.join(" ");
-			} catch {
-				// Fallback: phonemize entire text as one unit (no word mapping)
-				const result = await phonemize(text, "en-us");
-				joinedPhonemes = (Array.isArray(result) ? result[0] : result) || text;
-				phonemeCharCounts = null;
-			}
+			// Step 2: Split into chunks that fit within token limit
+			const chunks = splitIntoChunks(wordPhonemes);
 
-			// Step 2: Tokenize
-			const tokenIds = tokenize(joinedPhonemes, vocab);
+			// Step 3: Generate audio for each chunk
+			const allSamples: Float32Array[] = [];
+			const allWordDelays: number[] = [];
+			let totalOk = true;
 
-			// Step 3: Build input tensors
-			const numPhonemeTokens = tokenIds.length - 2; // exclude BOS/EOS
-			const style = getStyleVector(voiceData, numPhonemeTokens);
+			for (const chunk of chunks) {
+				const { samples, predDur } = await generateChunk(chunk.phonemes);
+				allSamples.push(samples);
 
-			const inputIds = new ort.Tensor(
-				"int64",
-				BigInt64Array.from(tokenIds.map(BigInt)),
-				[1, tokenIds.length],
-			);
-			const styleTensor = new ort.Tensor("float32", style, [1, STYLE_DIM]);
-			const speedTensor = new ort.Tensor("float32", new Float32Array([1.0]), [1]);
+				const chunkDurationMs = (samples.length / SAMPLE_RATE) * 1000;
 
-			// Step 4: Run inference
-			const results = await session.run({
-				input_ids: inputIds,
-				style: styleTensor,
-				speed: speedTensor,
-			});
-
-			// Extract outputs — names may vary, try common names then fall back to positional
-			const outputNames = Object.keys(results);
-			const audioOutput = results["waveform"] ?? results["audio"] ?? results[outputNames[0]];
-			const durOutput = results["pred_dur"] ?? results["durations"] ?? results[outputNames[1]];
-
-			const audioSamples = audioOutput.data as Float32Array;
-			const predDur = durOutput?.data as Float32Array | undefined;
-
-			// Step 5: Encode WAV and compute duration
-			const wav = encodeWav(audioSamples);
-			const durationMs = (audioSamples.length / SAMPLE_RATE) * 1000;
-
-			// Step 6: Compute word delays (normalized to actual audio duration)
-			let wordDelays: number[] | null = null;
-			if (predDur && phonemeCharCounts) {
-				try {
-					wordDelays = mapDurationsToWords(predDur, phonemeCharCounts, durationMs);
-					// Sanity check: word count must match
-					if (wordDelays.length !== words.length) {
-						wordDelays = null;
+				if (predDur && totalOk) {
+					try {
+						const delays = mapDurationsToWords(predDur, chunk.charCounts, chunkDurationMs);
+						allWordDelays.push(...delays);
+					} catch {
+						totalOk = false;
 					}
-				} catch {
-					wordDelays = null;
+				} else {
+					totalOk = false;
 				}
 			}
+
+			// Step 4: Concatenate audio
+			const totalSamples = allSamples.reduce((n, s) => n + s.length, 0);
+			const combined = new Float32Array(totalSamples);
+			let offset = 0;
+			for (const s of allSamples) {
+				combined.set(s, offset);
+				offset += s.length;
+			}
+
+			const wav = encodeWav(combined);
+			const durationMs = (combined.length / SAMPLE_RATE) * 1000;
+			const wordDelays = totalOk && allWordDelays.length === words.length ? allWordDelays : null;
 
 			parentPort!.postMessage({ type: "result", id, wav, durationMs, wordDelays });
 		} catch (err) {

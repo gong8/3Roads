@@ -96,6 +96,7 @@ export interface GameRoom {
 	ttsCache: Map<string, { audioId: string; durationMs: number; wordDelays: number[] | null }>;
 	pendingAudioReady: (() => void) | null;
 	audioReadyTimeout: ReturnType<typeof setTimeout> | null;
+	ttsAbort: AbortController | null;
 }
 
 // -- Client -> Server messages --

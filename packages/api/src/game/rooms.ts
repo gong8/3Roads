@@ -113,6 +113,7 @@ export async function createRoom(
 		ttsCache: new Map(),
 		pendingAudioReady: null,
 		audioReadyTimeout: null,
+		ttsAbort: null,
 	};
 
 	activeRooms.set(code, room);
@@ -240,6 +241,10 @@ function cleanupRoom(roomCode: string): void {
 	if (room.answerTimer) {
 		clearTimeout(room.answerTimer);
 	}
+	if (room.ttsAbort) {
+		room.ttsAbort.abort();
+		room.ttsAbort = null;
+	}
 
 	activeRooms.delete(roomCode);
 	log.info(`Room ${roomCode} cleaned up`);
@@ -250,6 +255,9 @@ setInterval(() => {
 	const now = Date.now();
 	for (const [code, room] of activeRooms) {
 		const idle = now - room.lastActivity;
+		// Don't clean up rooms that have disconnected players waiting to reconnect
+		const hasDisconnected = [...disconnectedPlayers.values()].some((d) => d.roomCode === code);
+		if (hasDisconnected) continue;
 		if (room.players.size === 0 || (room.phase === "game_over" && idle > 5 * 60_000) || idle > 30 * 60_000) {
 			cleanupRoom(code);
 		}
