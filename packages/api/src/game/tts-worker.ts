@@ -192,47 +192,85 @@ async function init() {
 		};
 	}
 
-	// Split words into chunks that fit within MAX_PHONEME_TOKENS
+	// Check if a word ends a sentence (ends with . ! ? or similar)
+	function isSentenceEnd(word: string): boolean {
+		return /[.!?]['""»)]*$/.test(word);
+	}
+
+	// Estimate token count for a set of phoneme strings joined with spaces
+	function estimateTokens(phonemeStrs: string[]): number {
+		let count = 0;
+		for (let i = 0; i < phonemeStrs.length; i++) {
+			count += [...phonemeStrs[i]].length;
+			if (i > 0) count++; // space token
+		}
+		return count;
+	}
+
+	// Split words into chunks at sentence boundaries that fit within MAX_PHONEME_TOKENS.
+	// Falls back to word-level splitting only if a single sentence exceeds the limit.
 	function splitIntoChunks(
+		words: string[],
 		wordPhonemes: string[],
 	): { wordIndices: number[]; phonemes: string; charCounts: number[] }[] {
+		// First, group words into sentences
+		const sentences: number[][] = []; // each entry is array of word indices
+		let currentSentence: number[] = [];
+		for (let i = 0; i < words.length; i++) {
+			currentSentence.push(i);
+			if (isSentenceEnd(words[i]) || i === words.length - 1) {
+				sentences.push(currentSentence);
+				currentSentence = [];
+			}
+		}
+
+		// Now pack sentences into chunks that fit within the token limit
 		const chunks: { wordIndices: number[]; phonemes: string; charCounts: number[] }[] = [];
-		let currentWords: number[] = [];
-		let currentPhonemes: string[] = [];
-		let currentTokenCount = 0;
+		let chunkWordIndices: number[] = [];
+		let chunkPhonemes: string[] = [];
 
-		for (let i = 0; i < wordPhonemes.length; i++) {
-			const ph = wordPhonemes[i];
-			const charCount = [...ph].length;
-			// +1 for space token between words (except first word in chunk)
-			const addedTokens = charCount + (currentPhonemes.length > 0 ? 1 : 0);
+		function flushChunk() {
+			if (chunkWordIndices.length === 0) return;
+			chunks.push({
+				wordIndices: [...chunkWordIndices],
+				phonemes: chunkPhonemes.join(" "),
+				charCounts: chunkWordIndices.map((idx) => [...wordPhonemes[idx]].length),
+			});
+			chunkWordIndices = [];
+			chunkPhonemes = [];
+		}
 
-			if (currentTokenCount + addedTokens > MAX_PHONEME_TOKENS && currentPhonemes.length > 0) {
-				// Flush current chunk
-				chunks.push({
-					wordIndices: [...currentWords],
-					phonemes: currentPhonemes.join(" "),
-					charCounts: currentWords.map((idx) => [...wordPhonemes[idx]].length),
-				});
-				currentWords = [];
-				currentPhonemes = [];
-				currentTokenCount = 0;
+		for (const sentence of sentences) {
+			const sentencePhonemes = sentence.map((i) => wordPhonemes[i]);
+			const sentenceTokens = estimateTokens(sentencePhonemes);
+
+			if (sentenceTokens > MAX_PHONEME_TOKENS) {
+				// Single sentence too long — flush current chunk, then split sentence by words
+				flushChunk();
+				for (const i of sentence) {
+					const ph = wordPhonemes[i];
+					const addedTokens = [...ph].length + (chunkPhonemes.length > 0 ? 1 : 0);
+					if (estimateTokens(chunkPhonemes) + addedTokens > MAX_PHONEME_TOKENS && chunkPhonemes.length > 0) {
+						flushChunk();
+					}
+					chunkWordIndices.push(i);
+					chunkPhonemes.push(ph);
+				}
+				flushChunk();
+				continue;
 			}
 
-			currentWords.push(i);
-			currentPhonemes.push(ph);
-			currentTokenCount += charCount + (currentPhonemes.length > 1 ? 1 : 0);
+			// Check if adding this sentence would exceed the limit
+			const combinedPhonemes = [...chunkPhonemes, ...sentencePhonemes];
+			if (estimateTokens(combinedPhonemes) > MAX_PHONEME_TOKENS) {
+				flushChunk();
+			}
+
+			chunkWordIndices.push(...sentence);
+			chunkPhonemes.push(...sentencePhonemes);
 		}
 
-		// Flush remaining
-		if (currentPhonemes.length > 0) {
-			chunks.push({
-				wordIndices: [...currentWords],
-				phonemes: currentPhonemes.join(" "),
-				charCounts: currentWords.map((idx) => [...wordPhonemes[idx]].length),
-			});
-		}
-
+		flushChunk();
 		return chunks;
 	}
 
@@ -246,7 +284,7 @@ async function init() {
 			const wordPhonemes = await phonemizeWords(words);
 
 			// Step 2: Split into chunks that fit within token limit
-			const chunks = splitIntoChunks(wordPhonemes);
+			const chunks = splitIntoChunks(words, wordPhonemes);
 
 			// Step 3: Generate audio for each chunk
 			const allSamples: Float32Array[] = [];

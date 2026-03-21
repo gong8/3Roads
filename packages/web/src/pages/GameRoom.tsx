@@ -47,6 +47,7 @@ export function GameRoom() {
 		setTeam,
 		updateSettings,
 		sendAudioReady,
+		cancelTts,
 		disconnect,
 	} = useGameRoom();
 
@@ -189,6 +190,7 @@ export function GameRoom() {
 						{state.ttsProgress.etaMs != null && state.ttsProgress.etaMs > 0 && (
 							<> — {Math.ceil(state.ttsProgress.etaMs / 60000)}m {Math.ceil((state.ttsProgress.etaMs % 60000) / 1000)}s left</>
 						)}
+						<button type="button" onClick={cancelTts} className="ml-2 underline hover:text-black">cancel</button>
 					</div>
 					<div className="w-full max-w-xs h-1 bg-gray-200">
 						<div

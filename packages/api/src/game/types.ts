@@ -145,6 +145,10 @@ export interface AudioReadyMsg {
 	type: "audio_ready";
 }
 
+export interface CancelTtsMsg {
+	type: "cancel_tts";
+}
+
 export interface EndGameMsg {
 	type: "end_game";
 }
@@ -179,7 +183,8 @@ export type ClientMessage =
 	| KickPlayerMsg
 	| SetTeamMsg
 	| UpdateSettingsMsg
-	| AudioReadyMsg;
+	| AudioReadyMsg
+	| CancelTtsMsg;
 
 // -- Server -> Client messages --
 

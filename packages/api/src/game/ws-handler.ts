@@ -118,6 +118,9 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 		case "audio_ready":
 			handleAudioReadyMsg(ws);
 			break;
+		case "cancel_tts":
+			handleCancelTts(ws);
+			break;
 		case "update_settings":
 			handleUpdateSettings(ws, msg);
 			break;
@@ -188,6 +191,18 @@ function requireModerator(ws: WebSocket): { room: GameRoom; playerId: string } |
 		return null;
 	}
 	return ctx;
+}
+
+function handleCancelTts(ws: WebSocket): void {
+	const ctx = getContext(ws);
+	if (!ctx) return;
+	if (ctx.room.ttsAbort) {
+		log.info(`Room ${ctx.room.code} — TTS cancelled by player`);
+		ctx.room.ttsAbort.abort();
+		ctx.room.ttsAbort = null;
+		ctx.room.settings.ttsEnabled = false;
+		broadcast(ctx.room, { type: "tts_progress", current: 1, total: 1 }); // clears progress bar
+	}
 }
 
 function handleAudioReadyMsg(ws: WebSocket): void {
