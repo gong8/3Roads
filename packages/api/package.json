@@ -12,7 +12,8 @@
     "@3roads/shared": "workspace:*",
     "@hono/node-server": "^1.19.11",
     "hono": "^4.7.2",
-    "sherpa-onnx-node": "^1.12.31",
+    "onnxruntime-node": "^1.22.0",
+    "phonemizer": "^1.2.1",
     "ws": "^8.19.0"
   },
   "devDependencies": {

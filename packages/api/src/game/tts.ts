@@ -6,7 +6,7 @@ import { createLogger } from "@3roads/shared";
 const log = createLogger("api:game:tts");
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const MODEL_DIR = resolve(__dirname, "../../../../data/models/kokoro-en-v0_19");
+const MODEL_DIR = resolve(__dirname, "../../../../data/models/kokoro-82m-timestamped");
 import { existsSync } from "node:fs";
 const WORKER_TS = resolve(__dirname, "tts-worker.ts");
 const WORKER_JS = resolve(__dirname, "tts-worker.js");
@@ -50,66 +50,110 @@ setInterval(() => {
 	}
 }, 60_000);
 
-// Worker-based TTS
-let worker: Worker | null = null;
-let workerReady: Promise<void> | null = null;
+// Worker pool TTS
+const POOL_SIZE = 10;
+
+type TtsResult = { wav: Buffer; durationMs: number; wordDelays: number[] | null };
+
+interface PoolWorker {
+	worker: Worker;
+	busy: boolean;
+	pending: Map<number, { resolve: (v: TtsResult) => void; reject: (e: Error) => void }>;
+}
+
+let pool: PoolWorker[] = [];
+let poolReady: Promise<void> | null = null;
 let nextId = 0;
-const pending = new Map<number, { resolve: (v: { wav: Buffer; durationMs: number }) => void; reject: (e: Error) => void }>();
+const queue: Array<{ id: number; text: string; words: string[]; resolve: (v: TtsResult) => void; reject: (e: Error) => void }> = [];
 
-function ensureWorker(): Promise<void> {
-	if (workerReady) return workerReady;
-
-	workerReady = new Promise((resolveReady, rejectReady) => {
-		log.info("Spawning TTS worker...");
+function spawnWorker(index: number): Promise<PoolWorker> {
+	return new Promise((resolveReady, rejectReady) => {
 		const isTsFile = WORKER_PATH.endsWith(".ts");
 		const w = new Worker(WORKER_PATH, {
 			workerData: { modelDir: MODEL_DIR },
 			...(isTsFile ? { execArgv: ["--import", "tsx"] } : {}),
 		});
 
+		const pw: PoolWorker = { worker: w, busy: false, pending: new Map() };
+
 		w.on("message", (msg: any) => {
 			if (msg.type === "ready") {
-				log.info("TTS worker ready");
-				worker = w;
-				resolveReady();
+				log.info(`TTS worker ${index} ready`);
+				resolveReady(pw);
 				return;
 			}
 			if (msg.type === "result") {
-				const p = pending.get(msg.id);
+				const p = pw.pending.get(msg.id);
 				if (p) {
-					pending.delete(msg.id);
-					p.resolve({ wav: msg.wav, durationMs: msg.durationMs });
+					pw.pending.delete(msg.id);
+					pw.busy = false;
+					p.resolve({ wav: msg.wav, durationMs: msg.durationMs, wordDelays: msg.wordDelays ?? null });
+					drainQueue();
+				}
+			}
+			if (msg.type === "error" && msg.id != null) {
+				const p = pw.pending.get(msg.id);
+				if (p) {
+					pw.pending.delete(msg.id);
+					pw.busy = false;
+					p.reject(new Error(msg.message));
+					drainQueue();
 				}
 			}
 		});
 
 		w.on("error", (err) => {
-			log.error(`TTS worker error: ${err.message}`);
+			log.error(`TTS worker ${index} error: ${err.message}`);
 			rejectReady(err);
-			for (const p of pending.values()) p.reject(err);
-			pending.clear();
+			for (const p of pw.pending.values()) p.reject(err);
+			pw.pending.clear();
+			pw.busy = false;
 		});
 
 		w.on("exit", (code) => {
-			log.warn(`TTS worker exited with code ${code}`);
-			worker = null;
-			workerReady = null;
+			log.warn(`TTS worker ${index} exited with code ${code}`);
+			pool = pool.filter((p) => p !== pw);
 		});
 	});
-
-	return workerReady;
 }
 
-export async function generateTTS(text: string): Promise<{ audio: Buffer; durationMs: number }> {
-	await ensureWorker();
-	if (!worker) throw new Error("TTS worker not available");
+function drainQueue(): void {
+	while (queue.length > 0) {
+		const free = pool.find((pw) => !pw.busy);
+		if (!free) break;
+		const job = queue.shift()!;
+		free.busy = true;
+		free.pending.set(job.id, { resolve: job.resolve, reject: job.reject });
+		free.worker.postMessage({ id: job.id, text: job.text, words: job.words });
+	}
+}
+
+function ensurePool(): Promise<void> {
+	if (poolReady) return poolReady;
+
+	poolReady = (async () => {
+		log.info(`Spawning ${POOL_SIZE} TTS workers...`);
+		const workers = await Promise.all(
+			Array.from({ length: POOL_SIZE }, (_, i) => spawnWorker(i)),
+		);
+		pool = workers;
+		log.info(`TTS worker pool ready (${pool.length} workers)`);
+	})();
+
+	return poolReady;
+}
+
+export async function generateTTS(text: string, words?: string[]): Promise<{ audio: Buffer; durationMs: number; wordDelays: number[] | null }> {
+	await ensurePool();
 
 	const id = nextId++;
+	const splitWords = words ?? text.split(/\s+/);
 	return new Promise((resolve, reject) => {
-		pending.set(id, { resolve: (v) => {
-			log.info(`TTS generated: ${text.length} chars → ${v.wav.length} bytes, ${Math.round(v.durationMs)}ms`);
-			resolve({ audio: v.wav, durationMs: v.durationMs });
-		}, reject });
-		worker!.postMessage({ id, text });
+		const wrappedResolve = (v: TtsResult) => {
+			log.info(`TTS generated: ${text.length} chars → ${v.wav.length} bytes, ${Math.round(v.durationMs)}ms, wordDelays=${v.wordDelays ? "yes" : "no"}`);
+			resolve({ audio: v.wav, durationMs: v.durationMs, wordDelays: v.wordDelays });
+		};
+		queue.push({ id, text, words: splitWords, resolve: wrappedResolve, reject });
+		drainQueue();
 	});
 }

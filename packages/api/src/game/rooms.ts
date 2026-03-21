@@ -223,10 +223,10 @@ export function disconnectPlayer(roomCode: string, playerId: string): Player | n
 				log.info(`Room ${roomCode} — "${next.name}" promoted to moderator (after disconnect timeout)`);
 			}
 		}
-	}, 10_000);
+	}, 24 * 60 * 60_000);
 
 	disconnectedPlayers.set(key, { roomCode, player, timeout });
-	log.info(`Room ${roomCode} — "${player.name}" disconnected, 10s grace period`);
+	log.info(`Room ${roomCode} — "${player.name}" disconnected, 24h grace period`);
 	return player;
 }
 
@@ -235,7 +235,7 @@ function cleanupRoom(roomCode: string): void {
 	if (!room) return;
 
 	if (room.tossupReading?.intervalHandle) {
-		clearInterval(room.tossupReading.intervalHandle);
+		clearTimeout(room.tossupReading.intervalHandle);
 	}
 	if (room.answerTimer) {
 		clearTimeout(room.answerTimer);

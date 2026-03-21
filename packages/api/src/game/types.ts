@@ -49,10 +49,11 @@ export interface BonusData {
 export interface TossupReading {
 	tossupIndex: number;
 	words: string[];
+	wordDelays: number[];
 	revealedCount: number;
 	powerMarkWordIndex: number | null;
 	answer: string;
-	intervalHandle: ReturnType<typeof setInterval> | null;
+	intervalHandle: ReturnType<typeof setTimeout> | null;
 	buzzedPlayerId: string | null;
 	buzzWordIndex: number | null;
 	incorrectBuzzers: Set<string>;
@@ -66,7 +67,7 @@ export interface BonusReading {
 	controllingPlayerId: string;
 	controllingTeam?: Team;
 	partScores: (boolean | null)[];
-	intervalHandle: ReturnType<typeof setInterval> | null;
+	intervalHandle: ReturnType<typeof setTimeout> | null;
 }
 
 export interface GameSettings {
@@ -92,7 +93,7 @@ export interface GameRoom {
 	settings: GameSettings;
 	lastActivity: number;
 	answerTimer: ReturnType<typeof setTimeout> | null;
-	ttsCache: Map<string, { audioId: string; durationMs: number }>;
+	ttsCache: Map<string, { audioId: string; durationMs: number; wordDelays: number[] | null }>;
 	pendingAudioReady: (() => void) | null;
 	audioReadyTimeout: ReturnType<typeof setTimeout> | null;
 }

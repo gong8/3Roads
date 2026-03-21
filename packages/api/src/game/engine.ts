@@ -5,6 +5,21 @@ import type { GameRoom, Player, ServerMessage, TossupReading } from "./types.js"
 
 const log = createLogger("api:game:engine");
 
+// -- Word timing helpers --
+
+const MIN_WORD_WEIGHT = 2; // minimum effective character weight (so "a" isn't near-zero)
+const PAUSE_WEIGHT = 1;    // extra weight per word to model inter-word pauses
+
+/**
+ * Compute per-word delays proportional to character length.
+ * Distributes totalDurationMs across words so longer words get more time.
+ */
+function computeWordDelays(words: string[], totalDurationMs: number): number[] {
+	const weights = words.map((w) => Math.max(w.length, MIN_WORD_WEIGHT) + PAUSE_WEIGHT);
+	const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+	return weights.map((w) => (w / totalWeight) * totalDurationMs);
+}
+
 // -- Broadcast helpers --
 
 export function broadcast(room: GameRoom, msg: ServerMessage): void {
@@ -90,18 +105,20 @@ export async function pregenerateTTS(room: GameRoom): Promise<void> {
 
 		broadcast(room, { type: "tts_progress", current: 0, total: texts.length });
 		const startTime = Date.now();
-		for (let i = 0; i < texts.length; i++) {
-			// Yield event loop so WS broadcasts flush to clients
-			await new Promise((r) => setImmediate(r));
-			const { key, text } = texts[i];
-			const { audio, durationMs } = await generateTTS(text);
-			const audioId = storeAudio(audio);
-			room.ttsCache.set(key, { audioId, durationMs });
-			const elapsed = Date.now() - startTime;
-			const avgMs = elapsed / (i + 1);
-			const etaMs = Math.round(avgMs * (texts.length - i - 1));
-			broadcast(room, { type: "tts_progress", current: i + 1, total: texts.length, etaMs });
-		}
+		let completed = 0;
+		await Promise.all(
+			texts.map(async ({ key, text }) => {
+				const words = text.split(/\s+/);
+				const { audio, durationMs, wordDelays } = await generateTTS(text, words);
+				const audioId = storeAudio(audio);
+				room.ttsCache.set(key, { audioId, durationMs, wordDelays });
+				completed++;
+				const elapsed = Date.now() - startTime;
+				const avgMs = elapsed / completed;
+				const etaMs = Math.round(avgMs * (texts.length - completed));
+				broadcast(room, { type: "tts_progress", current: completed, total: texts.length, etaMs });
+			}),
+		);
 		log.info(`Room ${room.code} — TTS pregeneration complete (${texts.length} clips)`);
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
@@ -141,9 +158,29 @@ export async function startTossup(room: GameRoom): Promise<void> {
 		? charIndexToWordIndex(tossup.question, tossup.powerMarkIndex)
 		: null;
 
+	// Look up pregenerated TTS audio
+	let audioUrl: string | undefined;
+	let wordDelays: number[];
+	if (room.settings.ttsEnabled) {
+		const cached = room.ttsCache.get(`tossup:${tossup.id}`);
+		if (cached) {
+			audioUrl = `/audio/${cached.audioId}`;
+			if (cached.wordDelays && cached.wordDelays.length === words.length) {
+				wordDelays = cached.wordDelays;
+			} else {
+				wordDelays = computeWordDelays(words, cached.durationMs);
+			}
+		} else {
+			wordDelays = computeWordDelays(words, room.settings.msPerWord * words.length);
+		}
+	} else {
+		wordDelays = computeWordDelays(words, room.settings.msPerWord * words.length);
+	}
+
 	room.tossupReading = {
 		tossupIndex: room.currentQuestionIndex,
 		words,
+		wordDelays,
 		revealedCount: 0,
 		powerMarkWordIndex,
 		answer: tossup.answer,
@@ -155,17 +192,6 @@ export async function startTossup(room: GameRoom): Promise<void> {
 
 	room.phase = "reading_tossup";
 	room.lastActivity = Date.now();
-
-	// Look up pregenerated TTS audio
-	let audioUrl: string | undefined;
-	let msPerWord = room.settings.msPerWord;
-	if (room.settings.ttsEnabled) {
-		const cached = room.ttsCache.get(`tossup:${tossup.id}`);
-		if (cached) {
-			audioUrl = `/audio/${cached.audioId}`;
-			msPerWord = cached.durationMs / words.length;
-		}
-	}
 
 	broadcast(room, { type: "phase_change", phase: "reading_tossup" });
 	broadcast(room, {
@@ -180,9 +206,15 @@ export async function startTossup(room: GameRoom): Promise<void> {
 	const startWordReveals = () => {
 		// First word immediately so it syncs with audio start
 		revealNextWord(room);
-		room.tossupReading!.intervalHandle = setInterval(() => {
-			revealNextWord(room);
-		}, msPerWord);
+		// Chain setTimeout for remaining words with per-word weighted delays
+		const scheduleNext = (index: number) => {
+			if (index >= words.length) return;
+			room.tossupReading!.intervalHandle = setTimeout(() => {
+				revealNextWord(room);
+				scheduleNext(index + 1);
+			}, wordDelays[index]);
+		};
+		scheduleNext(1); // word 0 already revealed
 	};
 
 	if (audioUrl) {
@@ -235,7 +267,7 @@ function revealNextWord(room: GameRoom): void {
 	if (tr.revealedCount >= tr.words.length) {
 		// All words revealed, wait a moment then mark dead
 		if (tr.intervalHandle) {
-			clearInterval(tr.intervalHandle);
+			clearTimeout(tr.intervalHandle);
 			tr.intervalHandle = null;
 		}
 		// Give a short window for buzzing after last word, then dead
@@ -277,7 +309,7 @@ export function handleBuzz(room: GameRoom, playerId: string): void {
 	// Stop word reveal (or cancel pending start)
 	cancelPendingAudioReady(room);
 	if (tr.intervalHandle) {
-		clearInterval(tr.intervalHandle);
+		clearTimeout(tr.intervalHandle);
 		tr.intervalHandle = null;
 	}
 
@@ -417,9 +449,15 @@ function resumeTossup(room: GameRoom): void {
 		return;
 	}
 
-	tr.intervalHandle = setInterval(() => {
-		revealNextWord(room);
-	}, room.settings.msPerWord);
+	// Resume with weighted delays from where we left off
+	const scheduleNext = (index: number) => {
+		if (index >= tr.words.length) return;
+		tr.intervalHandle = setTimeout(() => {
+			revealNextWord(room);
+			scheduleNext(index + 1);
+		}, tr.wordDelays[index]);
+	};
+	scheduleNext(tr.revealedCount);
 }
 
 function tossupDead(room: GameRoom): void {
@@ -428,7 +466,7 @@ function tossupDead(room: GameRoom): void {
 
 	cancelPendingAudioReady(room);
 	if (tr.intervalHandle) {
-		clearInterval(tr.intervalHandle);
+		clearTimeout(tr.intervalHandle);
 		tr.intervalHandle = null;
 	}
 
@@ -485,40 +523,48 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 
 	// Reveal leadin word-by-word, then start first part
 	const leadinWords = bonus.leadin.split(/\s+/);
-	let leadinMsPerWord = room.settings.msPerWord;
+	let leadinDelays: number[];
+	let leadinTotalMs = room.settings.msPerWord * leadinWords.length;
 	if (room.settings.ttsEnabled) {
 		const cachedLeadin = room.ttsCache.get(`bonus-leadin:${bonus.id}`);
 		if (cachedLeadin) {
-			leadinMsPerWord = cachedLeadin.durationMs / leadinWords.length;
+			leadinTotalMs = cachedLeadin.durationMs;
+			if (cachedLeadin.wordDelays && cachedLeadin.wordDelays.length === leadinWords.length) {
+				leadinDelays = cachedLeadin.wordDelays;
+			} else {
+				leadinDelays = computeWordDelays(leadinWords, leadinTotalMs);
+			}
+		} else {
+			leadinDelays = computeWordDelays(leadinWords, leadinTotalMs);
 		}
+	} else {
+		leadinDelays = computeWordDelays(leadinWords, leadinTotalMs);
 	}
 
 	const br = room.bonusReading;
 
 	const startLeadinReveals = () => {
-		let i = 0;
 		// First word immediately so it syncs with audio start
 		if (leadinWords.length > 0) {
 			broadcast(room, { type: "bonus_word_reveal", word: leadinWords[0] });
-			i = 1;
 		}
-		br.intervalHandle = setInterval(() => {
-			if (i < leadinWords.length) {
-				broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
-				i++;
-			} else {
-				if (br.intervalHandle) {
-					clearInterval(br.intervalHandle);
-					br.intervalHandle = null;
-				}
+		const scheduleNext = (i: number) => {
+			if (i >= leadinWords.length) {
+				br.intervalHandle = null;
 				// Brief pause after leadin finishes before first part
-				// When TTS enabled, remaining audio ≈ one word duration; otherwise use fixed delay
-				const leadinPause = room.settings.ttsEnabled ? Math.max(leadinMsPerWord, 500) : 1000;
+				const avgDelay = leadinTotalMs / leadinWords.length;
+				const leadinPause = room.settings.ttsEnabled ? Math.max(avgDelay, 500) : 1000;
 				setTimeout(() => {
 					sendBonusPart(room);
 				}, leadinPause);
+				return;
 			}
-		}, leadinMsPerWord);
+			br.intervalHandle = setTimeout(() => {
+				broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
+				scheduleNext(i + 1);
+			}, leadinDelays[i]);
+		};
+		scheduleNext(1); // word 0 already revealed
 	};
 
 	if (audioUrl) {
@@ -560,32 +606,32 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 	});
 
 	// Compute word timing from TTS cache when available
-	let partMsPerWord = room.settings.msPerWord;
+	let partDelays: number[];
 	if (room.settings.ttsEnabled) {
 		const bonus = room.bonuses[br.bonusIndex];
 		const partNum = bonus.parts[br.currentPart]?.partNum ?? br.currentPart + 1;
 		const cachedPart = room.ttsCache.get(`bonus-part:${bonus.id}:${partNum}`);
 		if (cachedPart) {
-			partMsPerWord = cachedPart.durationMs / partWords.length;
+			if (cachedPart.wordDelays && cachedPart.wordDelays.length === partWords.length) {
+				partDelays = cachedPart.wordDelays;
+			} else {
+				partDelays = computeWordDelays(partWords, cachedPart.durationMs);
+			}
+		} else {
+			partDelays = computeWordDelays(partWords, room.settings.msPerWord * partWords.length);
 		}
+	} else {
+		partDelays = computeWordDelays(partWords, room.settings.msPerWord * partWords.length);
 	}
 
 	const startPartReveals = () => {
 		// First word immediately so it syncs with audio start
-		let i = 0;
 		if (partWords.length > 0) {
 			broadcast(room, { type: "bonus_word_reveal", word: partWords[0] });
-			i = 1;
 		}
-		br.intervalHandle = setInterval(() => {
-			if (i < partWords.length) {
-				broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
-				i++;
-			} else {
-				if (br.intervalHandle) {
-					clearInterval(br.intervalHandle);
-					br.intervalHandle = null;
-				}
+		const scheduleNext = (i: number) => {
+			if (i >= partWords.length) {
+				br.intervalHandle = null;
 				// Now open for answering
 				room.phase = "bonus_answering";
 				broadcast(room, { type: "phase_change", phase: "bonus_answering" });
@@ -600,8 +646,14 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 						handleBonusAnswer(room, "");
 					}
 				}, room.settings.bonusAnswerTimeMs);
+				return;
 			}
-		}, partMsPerWord);
+			br.intervalHandle = setTimeout(() => {
+				broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
+				scheduleNext(i + 1);
+			}, partDelays[i]);
+		};
+		scheduleNext(1); // word 0 already revealed
 	};
 
 	if (audioUrl) {
@@ -629,7 +681,7 @@ export function handleBonusBuzz(room: GameRoom, playerId: string): void {
 
 	// Stop word reveal
 	if (br.intervalHandle) {
-		clearInterval(br.intervalHandle);
+		clearTimeout(br.intervalHandle);
 		br.intervalHandle = null;
 	}
 
@@ -727,7 +779,7 @@ function completeBonus(room: GameRoom): void {
 
 function advanceToNextQuestion(room: GameRoom): void {
 	if (room.bonusReading?.intervalHandle) {
-		clearInterval(room.bonusReading.intervalHandle);
+		clearTimeout(room.bonusReading.intervalHandle);
 	}
 	room.currentQuestionIndex++;
 	room.tossupReading = null;
@@ -748,12 +800,12 @@ export function skipQuestion(room: GameRoom): void {
 	cancelPendingAudioReady(room);
 	const tr = room.tossupReading;
 	if (tr?.intervalHandle) {
-		clearInterval(tr.intervalHandle);
+		clearTimeout(tr.intervalHandle);
 		tr.intervalHandle = null;
 	}
 	const br = room.bonusReading;
 	if (br?.intervalHandle) {
-		clearInterval(br.intervalHandle);
+		clearTimeout(br.intervalHandle);
 		br.intervalHandle = null;
 	}
 	if (room.answerTimer) {
@@ -771,10 +823,10 @@ export function skipQuestion(room: GameRoom): void {
 export function endGame(room: GameRoom): void {
 	cancelPendingAudioReady(room);
 	if (room.tossupReading?.intervalHandle) {
-		clearInterval(room.tossupReading.intervalHandle);
+		clearTimeout(room.tossupReading.intervalHandle);
 	}
 	if (room.bonusReading?.intervalHandle) {
-		clearInterval(room.bonusReading.intervalHandle);
+		clearTimeout(room.bonusReading.intervalHandle);
 	}
 	if (room.answerTimer) {
 		clearTimeout(room.answerTimer);
