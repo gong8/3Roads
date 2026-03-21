@@ -66,6 +66,7 @@ export interface BonusReading {
 	controllingPlayerId: string;
 	controllingTeam?: Team;
 	partScores: (boolean | null)[];
+	intervalHandle: ReturnType<typeof setInterval> | null;
 }
 
 export interface GameSettings {
@@ -73,6 +74,7 @@ export interface GameSettings {
 	answerTimeMs: number;
 	bonusAnswerTimeMs: number;
 	strictness: number;
+	ttsEnabled: boolean;
 }
 
 export interface GameRoom {
@@ -99,6 +101,7 @@ export interface CreateRoomMsg {
 	questionSetId: string;
 	playerName: string;
 	mode: GameMode;
+	ttsEnabled?: boolean;
 }
 
 export interface JoinRoomMsg {
@@ -148,6 +151,12 @@ export interface SetTeamMsg {
 	team: Team;
 }
 
+export interface UpdateSettingsMsg {
+	type: "update_settings";
+	strictness?: number;
+	msPerWord?: number;
+}
+
 export type ClientMessage =
 	| CreateRoomMsg
 	| JoinRoomMsg
@@ -159,7 +168,8 @@ export type ClientMessage =
 	| SkipMsg
 	| EndGameMsg
 	| KickPlayerMsg
-	| SetTeamMsg;
+	| SetTeamMsg
+	| UpdateSettingsMsg;
 
 // -- Server -> Client messages --
 
@@ -191,6 +201,7 @@ export interface TossupStartEvt {
 	totalQuestions: number;
 	category: string;
 	subcategory: string;
+	audioUrl?: string;
 }
 
 export interface WordRevealEvt {
@@ -227,13 +238,20 @@ export interface BonusStartEvt {
 	controllingTeam?: Team;
 	category: string;
 	subcategory: string;
+	audioUrl?: string;
 }
 
 export interface BonusPartEvt {
 	type: "bonus_part";
 	partNumber: number;
-	text: string;
+	totalWords: number;
 	value: number;
+	audioUrl?: string;
+}
+
+export interface BonusWordRevealEvt {
+	type: "bonus_word_reveal";
+	word: string;
 }
 
 export interface BonusPartResultEvt {
@@ -303,6 +321,7 @@ export type ServerMessage =
 	| TossupDeadEvt
 	| BonusStartEvt
 	| BonusPartEvt
+	| BonusWordRevealEvt
 	| BonusPartResultEvt
 	| BonusCompleteEvt
 	| GameOverEvt

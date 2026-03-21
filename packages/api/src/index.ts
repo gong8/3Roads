@@ -4,6 +4,7 @@ import { createLogger, getDb, initDb } from "@3roads/shared";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { attachGameWebSocket, getActiveRoomsList } from "./game/index.js";
+import { getAudio } from "./game/tts.js";
 import { foldersRoutes } from "./routes/folders.js";
 import { generateRoutes } from "./routes/generate.js";
 import { questionsRoutes } from "./routes/questions.js";
@@ -78,6 +79,15 @@ app.delete("/bonuses/:id", async (c) => {
 	}
 });
 
+// Serve cached TTS audio
+app.get("/audio/:id", (c) => {
+	const buf = getAudio(c.req.param("id"));
+	if (!buf) return c.json({ error: "Not found" }, 404);
+	return new Response(buf, {
+		headers: { "Content-Type": "audio/wav", "Cache-Control": "no-store" },
+	});
+});
+
 app.get("/game/rooms", (c) => c.json(getActiveRoomsList()));
 
 app.get("/", (c) => c.json({ name: "3roads-api", version: "0.0.1" }));
@@ -91,6 +101,6 @@ const server = createServer(getRequestListener(app.fetch));
 // Attach WebSocket BEFORE server.listen so upgrade handler is registered first
 attachGameWebSocket(server);
 
-server.listen(port, () => {
-	log.info(`3Roads API running on http://localhost:${port}`);
+server.listen(port, "0.0.0.0", () => {
+	log.info(`3Roads API running on http://0.0.0.0:${port}`);
 });

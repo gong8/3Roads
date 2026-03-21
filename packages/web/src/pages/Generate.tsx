@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useGenerationStream } from "../hooks/useGenerationStream";
+import { useGenerate } from "../hooks/useGenerate";
 
 const DIFFICULTIES = [
   "Middle School",
@@ -19,52 +19,36 @@ export function Generate() {
   const [bonusCount, setBonusCount] = useState(5);
   const [difficulty, setDifficulty] = useState("Regular High School");
   const {
-    isStreaming, content, error, setId,
-    savedTossups, savedBonuses, targetTossups, targetBonuses,
-    phase, generate, stop,
-  } = useGenerationStream();
+    isGenerating, error, setId, status,
+    tossupCount: savedTossups, bonusCount: savedBonuses,
+    targetTossups, targetBonuses,
+    generate,
+  } = useGenerate();
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!theme.trim()) return;
-    console.log("[3roads:ui]", "form submitted:", { theme: theme.trim(), tossupCount, bonusCount, difficulty });
     generate(theme.trim(), tossupCount, bonusCount, difficulty);
   };
 
   const totalTarget = targetTossups + targetBonuses;
   const totalSaved = savedTossups + savedBonuses;
-  const isDone = !isStreaming && totalSaved > 0;
+  const isDone = status === "complete";
 
-  // Count ANSWER: markers in content for writing progress
-  const answerCount = (content.match(/ANSWER:/g) || []).length;
-  const writtenTossups = Math.min(answerCount, targetTossups);
-  const writtenBonuses = answerCount > targetTossups
-    ? Math.min(Math.floor((answerCount - targetTossups) / 3), targetBonuses)
-    : 0;
-
-  // Compute progress percentage based on phase
   let progress = 0;
   if (totalTarget > 0) {
-    if (phase === "writing_tossups") {
-      progress = (writtenTossups / totalTarget) * 100;
-    } else if (phase === "saving_tossups") {
-      progress = (targetTossups / totalTarget) * 100;
-    } else if (phase === "writing_bonuses") {
-      progress = ((savedTossups + writtenBonuses) / totalTarget) * 100;
-    } else if (phase === "saving_bonuses") {
-      progress = 100;
-    } else if (isDone) {
-      progress = 100;
-    }
+    progress = (totalSaved / totalTarget) * 100;
   }
 
-  const phaseText = isStreaming
-    ? phase === "writing_tossups" ? `writing tossups (${writtenTossups}/${targetTossups})`
-    : phase === "saving_tossups" ? "saving tossups..."
-    : phase === "writing_bonuses" ? `writing bonuses (${writtenBonuses}/${targetBonuses})`
-    : phase === "saving_bonuses" ? "saving bonuses..."
-    : "generating..."
-    : isDone ? "done" : "";
+  const phaseText = isGenerating
+    ? savedTossups === 0 && savedBonuses === 0
+      ? "generating..."
+      : savedTossups < targetTossups
+        ? `writing tossups (${savedTossups}/${targetTossups})`
+        : savedBonuses < targetBonuses
+          ? `writing bonuses (${savedBonuses}/${targetBonuses})`
+          : "finishing..."
+    : isDone ? "done" : status === "error" ? "error" : "";
 
   return (
     <div>
@@ -77,7 +61,7 @@ export function Generate() {
             onChange={(e) => setTheme(e.target.value)}
             className="border border-black px-2 py-1 w-full font-mono"
             placeholder="e.g. American Civil War, Organic Chemistry"
-            disabled={isStreaming}
+            disabled={isGenerating}
           />
         </div>
         <div className="mb-3">
@@ -86,7 +70,7 @@ export function Generate() {
             value={difficulty}
             onChange={(e) => setDifficulty(e.target.value)}
             className="border border-black px-2 py-1 font-mono"
-            disabled={isStreaming}
+            disabled={isGenerating}
           >
             {DIFFICULTIES.map((d) => (
               <option key={d} value={d}>{d.toLowerCase()}</option>
@@ -103,7 +87,7 @@ export function Generate() {
               min={0}
               max={20}
               className="border border-black px-2 py-1 w-20 font-mono"
-              disabled={isStreaming}
+              disabled={isGenerating}
             />
           </div>
           <div>
@@ -115,33 +99,22 @@ export function Generate() {
               min={0}
               max={20}
               className="border border-black px-2 py-1 w-20 font-mono"
-              disabled={isStreaming}
+              disabled={isGenerating}
             />
           </div>
         </div>
-        <div className="flex gap-2">
-          <button
-            type="submit"
-            disabled={isStreaming || !theme.trim()}
-            className="border border-black px-3 py-1 disabled:text-gray-400 disabled:border-gray-400"
-          >
-            generate
-          </button>
-          {isStreaming && (
-            <button
-              type="button"
-              onClick={stop}
-              className="border border-black px-3 py-1"
-            >
-              stop
-            </button>
-          )}
-        </div>
+        <button
+          type="submit"
+          disabled={isGenerating || !theme.trim()}
+          className="border border-black px-3 py-1 disabled:text-gray-400 disabled:border-gray-400"
+        >
+          generate
+        </button>
       </form>
 
       {error && <p className="text-red-600 mb-4">error: {error}</p>}
 
-      {(isStreaming || isDone) && (
+      {(isGenerating || isDone) && (
         <div className="border-t border-black pt-4">
           <div className="mb-3 text-sm text-gray-600">
             {phaseText}
@@ -163,10 +136,6 @@ export function Generate() {
             <p className="mb-4">
               <Link to={`/sets/${setId}`} className="underline">view set</Link>
             </p>
-          )}
-
-          {content && (
-            <pre className="whitespace-pre-wrap font-mono text-sm">{content}</pre>
           )}
         </div>
       )}

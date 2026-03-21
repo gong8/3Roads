@@ -1,5 +1,6 @@
 import { createLogger } from "@3roads/shared";
 import { judgeAnswer } from "./judge.js";
+import { generateTTS, storeAudio } from "./tts.js";
 import type { GameRoom, Player, ServerMessage, TossupReading } from "./types.js";
 
 const log = createLogger("api:game:engine");
@@ -89,7 +90,7 @@ export function startGame(room: GameRoom): void {
 	startTossup(room);
 }
 
-export function startTossup(room: GameRoom): void {
+export async function startTossup(room: GameRoom): Promise<void> {
 	if (room.currentQuestionIndex >= room.tossups.length) {
 		endGame(room);
 		return;
@@ -116,6 +117,23 @@ export function startTossup(room: GameRoom): void {
 	room.phase = "reading_tossup";
 	room.lastActivity = Date.now();
 
+	// Generate TTS if enabled
+	let audioUrl: string | undefined;
+	let msPerWord = room.settings.msPerWord;
+	if (room.settings.ttsEnabled) {
+		try {
+			const { audio, durationMs } = await generateTTS(tossup.question);
+			const audioId = storeAudio(audio);
+			audioUrl = `/audio/${audioId}`;
+			msPerWord = durationMs / words.length;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			log.warn(`TTS failed for tossup, falling back to text-only: ${msg}`);
+			broadcast(room, { type: "error", message: `TTS unavailable: ${msg}` });
+			room.settings.ttsEnabled = false; // disable for rest of game to avoid repeated failures
+		}
+	}
+
 	broadcast(room, { type: "phase_change", phase: "reading_tossup" });
 	broadcast(room, {
 		type: "tossup_start",
@@ -123,12 +141,13 @@ export function startTossup(room: GameRoom): void {
 		totalQuestions: room.tossups.length,
 		category: tossup.category,
 		subcategory: tossup.subcategory,
+		audioUrl,
 	});
 
 	// Start word-by-word reveal
 	room.tossupReading.intervalHandle = setInterval(() => {
 		revealNextWord(room);
-	}, room.settings.msPerWord);
+	}, msPerWord);
 }
 
 function revealNextWord(room: GameRoom): void {
@@ -259,6 +278,12 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 
 		broadcastPlayerList(room);
 
+		// Brief pause to show correct answer before moving to bonus
+		await new Promise((r) => setTimeout(r, 2000));
+
+		// Guard: if game state moved on during the pause, bail out
+		if (room.tossupReading !== tr) return;
+
 		// Move to bonus if available
 		if (bonusIndex < room.bonuses.length) {
 			startBonus(room, playerId, bonusIndex);
@@ -331,7 +356,7 @@ function tossupDead(room: GameRoom): void {
 	advanceToNextQuestion(room);
 }
 
-function startBonus(room: GameRoom, controllingPlayerId: string, bonusIndex: number): void {
+async function startBonus(room: GameRoom, controllingPlayerId: string, bonusIndex: number): Promise<void> {
 	const bonus = room.bonuses[bonusIndex];
 	if (!bonus) {
 		advanceToNextQuestion(room);
@@ -352,28 +377,60 @@ function startBonus(room: GameRoom, controllingPlayerId: string, bonusIndex: num
 		controllingPlayerId,
 		controllingTeam: controllingPlayer.team,
 		partScores: bonus.parts.map(() => null),
+		intervalHandle: null,
 	};
 
 	room.phase = "reading_bonus";
 	room.lastActivity = Date.now();
 
+	// Generate TTS for leadin if enabled
+	let audioUrl: string | undefined;
+	if (room.settings.ttsEnabled) {
+		try {
+			const { audio } = await generateTTS(bonus.leadin);
+			const audioId = storeAudio(audio);
+			audioUrl = `/audio/${audioId}`;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			log.warn(`TTS failed for bonus leadin: ${msg}`);
+			broadcast(room, { type: "error", message: `TTS unavailable: ${msg}` });
+			room.settings.ttsEnabled = false;
+		}
+	}
+
 	broadcast(room, { type: "phase_change", phase: "reading_bonus" });
 	broadcast(room, {
 		type: "bonus_start",
-		leadin: bonus.leadin,
+		leadin: "",
 		controllingPlayerName: controllingPlayer.name,
 		controllingTeam: controllingPlayer.team,
 		category: bonus.category,
 		subcategory: bonus.subcategory,
+		audioUrl,
 	});
 
-	// Send first part after a short delay
-	setTimeout(() => {
-		sendBonusPart(room);
-	}, 1500);
+	// Reveal leadin word-by-word, then start first part
+	const leadinWords = bonus.leadin.split(/\s+/);
+	let i = 0;
+	const br = room.bonusReading;
+	br.intervalHandle = setInterval(() => {
+		if (i < leadinWords.length) {
+			broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
+			i++;
+		} else {
+			if (br.intervalHandle) {
+				clearInterval(br.intervalHandle);
+				br.intervalHandle = null;
+			}
+			// Brief pause after leadin finishes before first part
+			setTimeout(() => {
+				sendBonusPart(room);
+			}, 1000);
+		}
+	}, room.settings.msPerWord);
 }
 
-function sendBonusPart(room: GameRoom): void {
+async function sendBonusPart(room: GameRoom): Promise<void> {
 	const br = room.bonusReading;
 	if (!br || br.currentPart >= br.parts.length) {
 		completeBonus(room);
@@ -381,27 +438,60 @@ function sendBonusPart(room: GameRoom): void {
 	}
 
 	const part = br.parts[br.currentPart];
-	room.phase = "bonus_answering";
+	const partWords = part.text.split(/\s+/);
 
-	broadcast(room, { type: "phase_change", phase: "bonus_answering" });
+	// Generate TTS for bonus part if enabled
+	let audioUrl: string | undefined;
+	if (room.settings.ttsEnabled) {
+		try {
+			const { audio } = await generateTTS(part.text);
+			const audioId = storeAudio(audio);
+			audioUrl = `/audio/${audioId}`;
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			log.warn(`TTS failed for bonus part: ${msg}`);
+			broadcast(room, { type: "error", message: `TTS unavailable: ${msg}` });
+			room.settings.ttsEnabled = false;
+		}
+	}
+
+	room.phase = "reading_bonus";
+	broadcast(room, { type: "phase_change", phase: "reading_bonus" });
 	broadcast(room, {
 		type: "bonus_part",
 		partNumber: br.currentPart + 1,
-		text: part.text,
+		totalWords: partWords.length,
 		value: part.value,
-	});
-	broadcast(room, {
-		type: "await_bonus_answer",
-		controllingPlayerId: br.controllingPlayerId,
-		timeMs: room.settings.bonusAnswerTimeMs,
+		audioUrl,
 	});
 
-	// Bonus answer timeout
-	room.answerTimer = setTimeout(() => {
-		if (room.phase === "bonus_answering" && room.bonusReading === br) {
-			handleBonusAnswer(room, "");
+	// Reveal part text word-by-word, then open for answering
+	let i = 0;
+	br.intervalHandle = setInterval(() => {
+		if (i < partWords.length) {
+			broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
+			i++;
+		} else {
+			if (br.intervalHandle) {
+				clearInterval(br.intervalHandle);
+				br.intervalHandle = null;
+			}
+			// Now open for answering
+			room.phase = "bonus_answering";
+			broadcast(room, { type: "phase_change", phase: "bonus_answering" });
+			broadcast(room, {
+				type: "await_bonus_answer",
+				controllingPlayerId: br.controllingPlayerId,
+				timeMs: room.settings.bonusAnswerTimeMs,
+			});
+
+			room.answerTimer = setTimeout(() => {
+				if (room.phase === "bonus_answering" && room.bonusReading === br) {
+					handleBonusAnswer(room, "");
+				}
+			}, room.settings.bonusAnswerTimeMs);
 		}
-	}, room.settings.bonusAnswerTimeMs);
+	}, room.settings.msPerWord);
 }
 
 export async function handleBonusAnswer(room: GameRoom, answer: string): Promise<void> {
@@ -463,7 +553,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 	} else {
 		setTimeout(() => {
 			sendBonusPart(room);
-		}, 1000);
+		}, 1500);
 	}
 }
 
@@ -480,6 +570,9 @@ function completeBonus(room: GameRoom): void {
 }
 
 function advanceToNextQuestion(room: GameRoom): void {
+	if (room.bonusReading?.intervalHandle) {
+		clearInterval(room.bonusReading.intervalHandle);
+	}
 	room.currentQuestionIndex++;
 	room.tossupReading = null;
 	room.bonusReading = null;
@@ -501,6 +594,11 @@ export function skipQuestion(room: GameRoom): void {
 		clearInterval(tr.intervalHandle);
 		tr.intervalHandle = null;
 	}
+	const br = room.bonusReading;
+	if (br?.intervalHandle) {
+		clearInterval(br.intervalHandle);
+		br.intervalHandle = null;
+	}
 	if (room.answerTimer) {
 		clearTimeout(room.answerTimer);
 		room.answerTimer = null;
@@ -516,6 +614,9 @@ export function skipQuestion(room: GameRoom): void {
 export function endGame(room: GameRoom): void {
 	if (room.tossupReading?.intervalHandle) {
 		clearInterval(room.tossupReading.intervalHandle);
+	}
+	if (room.bonusReading?.intervalHandle) {
+		clearInterval(room.bonusReading.intervalHandle);
 	}
 	if (room.answerTimer) {
 		clearTimeout(room.answerTimer);

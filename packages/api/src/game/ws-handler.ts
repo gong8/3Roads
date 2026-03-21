@@ -74,7 +74,7 @@ function sendRaw(ws: WebSocket, msg: ServerMessage): void {
 async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 	switch (msg.type) {
 		case "create_room":
-			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode);
+			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled);
 			break;
 		case "join_room":
 			await handleJoinRoom(ws, msg.roomCode, msg.playerName);
@@ -106,6 +106,9 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 		case "set_team":
 			handleSetTeam(ws, msg.playerId, msg.team);
 			break;
+		case "update_settings":
+			handleUpdateSettings(ws, msg);
+			break;
 		default:
 			sendRaw(ws, { type: "error", message: "Unknown message type" });
 	}
@@ -116,8 +119,9 @@ async function handleCreateRoom(
 	questionSetId: string,
 	playerName: string,
 	mode: "ffa" | "teams",
+	ttsEnabled?: boolean,
 ): Promise<void> {
-	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws);
+	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false);
 	wsContext.set(ws, { roomCode: room.code, playerId });
 	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId });
 	broadcastPlayerList(room);
@@ -254,6 +258,18 @@ function handleKickPlayer(ws: WebSocket, targetPlayerId: string): void {
 	removePlayer(ctx.room.code, targetPlayerId);
 	broadcast(ctx.room, { type: "player_kicked", playerId: targetPlayerId, playerName: target.name });
 	broadcastPlayerList(ctx.room);
+}
+
+function handleUpdateSettings(ws: WebSocket, msg: { strictness?: number; msPerWord?: number }): void {
+	const ctx = requireModerator(ws);
+	if (!ctx) return;
+
+	if (msg.strictness != null) {
+		ctx.room.settings.strictness = Math.max(1, Math.min(10, Math.round(msg.strictness)));
+	}
+	if (msg.msPerWord != null) {
+		ctx.room.settings.msPerWord = Math.max(100, Math.min(500, Math.round(msg.msPerWord)));
+	}
 }
 
 function handleSetTeam(ws: WebSocket, targetPlayerId: string, team: "a" | "b"): void {

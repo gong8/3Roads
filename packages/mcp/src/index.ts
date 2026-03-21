@@ -85,7 +85,12 @@ httpServer.on("error", (err) => {
 });
 
 httpServer.on("clientError", (err) => {
-  log.error("HTTP client connection error", err);
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "ECONNRESET" || code === "EPIPE") {
+    log.debug(`HTTP client disconnected (${code})`);
+  } else {
+    log.error("HTTP client connection error", err);
+  }
 });
 
 httpServer.listen(MCP_PORT, "127.0.0.1", () => {

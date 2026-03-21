@@ -33,6 +33,7 @@ export async function createRoom(
 	playerName: string,
 	mode: GameMode,
 	ws: WebSocket,
+	ttsEnabled = false,
 ): Promise<{ room: GameRoom; playerId: string }> {
 	const db = getDb();
 	const set = await db.questionSet.findUnique({
@@ -104,7 +105,8 @@ export async function createRoom(
 			msPerWord: 300,
 			answerTimeMs: 8000,
 			bonusAnswerTimeMs: 10000,
-			strictness: 0.5,
+			strictness: 7,
+			ttsEnabled,
 		},
 		lastActivity: Date.now(),
 		answerTimer: null,

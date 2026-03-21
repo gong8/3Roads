@@ -6,3 +6,6 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 .env.local
+.venv
+vendor/fish-speech/.venv
+vendor/fish-speech/checkpoints

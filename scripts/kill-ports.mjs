@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 
-const ports = [7001, 7002, 7003];
+const ports = [7001, 7002, 7003, 8080];
 
 for (const port of ports) {
 	try {

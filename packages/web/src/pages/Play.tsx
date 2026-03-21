@@ -11,6 +11,7 @@ export function Play() {
 	const [roomCode, setRoomCode] = useState("");
 	const [selectedSetId, setSelectedSetId] = useState("");
 	const [mode, setMode] = useState<"ffa" | "teams">("ffa");
+	const [ttsEnabled, setTtsEnabled] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 
 	const { data: sets } = useSets();
@@ -19,7 +20,7 @@ export function Play() {
 		if (!name.trim()) { setError("enter a name"); return; }
 		if (!selectedSetId) { setError("select a question set"); return; }
 		navigate("/play/new", {
-			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode },
+			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled },
 		});
 	};
 
@@ -80,6 +81,16 @@ export function Play() {
 							<option value="ffa">free for all</option>
 							<option value="teams">teams (2)</option>
 						</select>
+					</div>
+					<div className="mb-3">
+						<label className="text-xs text-gray-500 flex items-center gap-2">
+							<input
+								type="checkbox"
+								checked={ttsEnabled}
+								onChange={(e) => setTtsEnabled(e.target.checked)}
+							/>
+							text-to-speech (requires Fish Speech server)
+						</label>
 					</div>
 					<button type="button" onClick={handleCreate} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
 						create room

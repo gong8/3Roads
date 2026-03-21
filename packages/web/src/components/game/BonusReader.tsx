@@ -11,19 +11,24 @@ interface Props {
 	controllingPlayerName: string;
 	category: string;
 	subcategory: string;
-	currentPart: { partNumber: number; text: string; value: number } | null;
+	words: string[];
+	currentPart: { partNumber: number; value: number } | null;
 	partResults: PartResult[];
 	totalPoints: number | null;
 }
 
-export function BonusReader({ leadin, controllingPlayerName, category, subcategory, currentPart, partResults, totalPoints }: Props) {
+export function BonusReader({ controllingPlayerName, category, subcategory, words, currentPart, partResults, totalPoints }: Props) {
 	return (
 		<div className="border border-black p-3 mb-3">
 			<div className="flex justify-between text-xs text-gray-500 mb-2">
 				<span>{category} / {subcategory}</span>
 				<span>bonus for {controllingPlayerName}</span>
 			</div>
-			<p className="mb-3">{leadin}</p>
+
+			{/* Leadin or current part text shown word-by-word */}
+			{!currentPart && words.length > 0 && (
+				<p className="mb-3">{words.join(" ")}</p>
+			)}
 
 			{partResults.map((r) => (
 				<div key={r.partNumber} className="ml-4 mb-2 text-xs">
@@ -36,7 +41,7 @@ export function BonusReader({ leadin, controllingPlayerName, category, subcatego
 
 			{currentPart && (
 				<div className="ml-4 mb-2">
-					<p>[{currentPart.value}] {currentPart.text}</p>
+					<p>[{currentPart.value}] {words.join(" ")}</p>
 				</div>
 			)}
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useGameAudio } from "../hooks/useGameAudio";
 import { useGameRoom } from "../hooks/useGameRoom";
 import { AnswerInput } from "../components/game/AnswerInput";
 import { BonusReader } from "../components/game/BonusReader";
@@ -14,6 +15,7 @@ interface CreateState {
 	questionSetId: string;
 	playerName: string;
 	mode: "ffa" | "teams";
+	ttsEnabled?: boolean;
 }
 
 interface JoinState {
@@ -41,10 +43,13 @@ export function GameRoom() {
 		endGame,
 		kickPlayer,
 		setTeam,
+		updateSettings,
 		disconnect,
 	} = useGameRoom();
 
 	const locationState = location.state as LocationState;
+
+	useGameAudio(state);
 
 	// Initialize connection on mount
 	useEffect(() => {
@@ -56,7 +61,7 @@ export function GameRoom() {
 		initRef.current = true;
 
 		if (locationState.action === "create") {
-			createRoom(locationState.questionSetId, locationState.playerName, locationState.mode);
+			createRoom(locationState.questionSetId, locationState.playerName, locationState.mode, locationState.ttsEnabled ?? false);
 		} else if (locationState.action === "join" && roomCode) {
 			joinRoom(roomCode, locationState.playerName);
 		}
@@ -138,6 +143,17 @@ export function GameRoom() {
 					{isTeamMode && (
 						<TeamAssignment players={state.players} isModerator={isModerator} onSetTeam={setTeam} />
 					)}
+					{isModerator && (
+						<ModeratorPanel
+							phase={state.phase}
+							onSkip={skip}
+							onNext={nextQuestion}
+							onEndGame={endGame}
+							onKick={kickPlayer}
+							onUpdateSettings={updateSettings}
+							players={state.players}
+						/>
+					)}
 					{isModerator && state.players.length >= 1 && (
 						<button type="button" onClick={startGame} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
 							start game
@@ -200,6 +216,7 @@ export function GameRoom() {
 						controllingPlayerName={state.bonus.controllingPlayerName}
 						category={state.bonus.category}
 						subcategory={state.bonus.subcategory}
+						words={state.bonus.words}
 						currentPart={state.bonus.currentPart}
 						partResults={state.bonus.partResults}
 						totalPoints={state.bonus.totalPoints}
@@ -272,6 +289,7 @@ export function GameRoom() {
 						onNext={nextQuestion}
 						onEndGame={endGame}
 						onKick={kickPlayer}
+						onUpdateSettings={updateSettings}
 						players={state.players}
 					/>
 				</div>

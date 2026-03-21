@@ -32,6 +32,7 @@ interface TossupState {
 	subcategory: string;
 	words: string[];
 	isPowerZone: boolean;
+	audioUrl?: string;
 }
 
 interface BonusState {
@@ -40,9 +41,11 @@ interface BonusState {
 	controllingTeam?: Team;
 	category: string;
 	subcategory: string;
-	currentPart: { partNumber: number; text: string; value: number } | null;
+	words: string[];
+	currentPart: { partNumber: number; value: number; audioUrl?: string } | null;
 	partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number }[];
 	totalPoints: number | null;
+	audioUrl?: string;
 }
 
 interface AnswerResult {
@@ -79,13 +82,14 @@ type Action =
 	| { type: "room_joined"; roomCode: string; playerId: string }
 	| { type: "player_list"; players: PlayerInfo[] }
 	| { type: "phase_change"; phase: GamePhase }
-	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string }
+	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string; audioUrl?: string }
 	| { type: "word_reveal"; wordIndex: number; word: string; isPowerZone: boolean }
 	| { type: "player_buzzed"; playerId: string; playerName: string }
 	| { type: "answer_result"; playerId: string; playerName: string; answer: string; correct: boolean; points: number }
 	| { type: "tossup_dead"; answer: string }
-	| { type: "bonus_start"; leadin: string; controllingPlayerName: string; controllingTeam?: Team; category: string; subcategory: string }
-	| { type: "bonus_part"; partNumber: number; text: string; value: number }
+	| { type: "bonus_start"; leadin: string; controllingPlayerName: string; controllingTeam?: Team; category: string; subcategory: string; audioUrl?: string }
+	| { type: "bonus_part"; partNumber: number; totalWords: number; value: number; audioUrl?: string }
+	| { type: "bonus_word_reveal"; word: string }
 	| { type: "bonus_part_result"; partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number }
 	| { type: "bonus_complete"; totalBonusPoints: number }
 	| { type: "game_over"; players: PlayerInfo[] }
@@ -147,6 +151,7 @@ function reducer(state: GameState, action: Action): GameState {
 					subcategory: action.subcategory,
 					words: [],
 					isPowerZone: true,
+					audioUrl: action.audioUrl,
 				},
 				lastResult: null,
 				deadAnswer: null,
@@ -192,9 +197,11 @@ function reducer(state: GameState, action: Action): GameState {
 					controllingTeam: action.controllingTeam,
 					category: action.category,
 					subcategory: action.subcategory,
+					words: [],
 					currentPart: null,
 					partResults: [],
 					totalPoints: null,
+					audioUrl: action.audioUrl,
 				},
 			};
 		case "bonus_part":
@@ -203,7 +210,17 @@ function reducer(state: GameState, action: Action): GameState {
 				...state,
 				bonus: {
 					...state.bonus,
-					currentPart: { partNumber: action.partNumber, text: action.text, value: action.value },
+					words: [],
+					currentPart: { partNumber: action.partNumber, value: action.value, audioUrl: action.audioUrl },
+				},
+			};
+		case "bonus_word_reveal":
+			if (!state.bonus) return state;
+			return {
+				...state,
+				bonus: {
+					...state.bonus,
+					words: [...state.bonus.words, action.word],
 				},
 			};
 		case "bonus_part_result":
@@ -283,14 +300,14 @@ export function useGameRoom() {
 	}, []);
 
 	const createRoom = useCallback(
-		async (questionSetId: string, playerName: string, mode: "ffa" | "teams") => {
+		async (questionSetId: string, playerName: string, mode: "ffa" | "teams", ttsEnabled = false) => {
 			connect();
 			try {
 				await socketRef.current?.ready;
 			} catch {
 				return; // disconnect handler already dispatched
 			}
-			send({ type: "create_room", questionSetId, playerName, mode });
+			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled });
 		},
 		[connect, send],
 	);
@@ -317,6 +334,7 @@ export function useGameRoom() {
 	const endGame = useCallback(() => send({ type: "end_game" }), [send]);
 	const kickPlayer = useCallback((playerId: string) => send({ type: "kick_player", playerId }), [send]);
 	const setTeam = useCallback((playerId: string, team: "a" | "b") => send({ type: "set_team", playerId, team }), [send]);
+	const updateSettings = useCallback((settings: { strictness?: number; msPerWord?: number }) => send({ type: "update_settings", ...settings }), [send]);
 	const clearError = useCallback(() => dispatch({ type: "clear_error" }), []);
 	const disconnect = useCallback(() => {
 		socketRef.current?.close();
@@ -336,6 +354,7 @@ export function useGameRoom() {
 		endGame,
 		kickPlayer,
 		setTeam,
+		updateSettings,
 		clearError,
 		disconnect,
 	};

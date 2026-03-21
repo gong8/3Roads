@@ -3,6 +3,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { streamCliChat } from "../services/cli-chat.js";
+import { runGeneration } from "../services/generate-orchestrator.js";
 import { startStream, subscribe } from "../services/stream-manager.js";
 
 const log = createLogger("api:generate");
@@ -175,6 +176,60 @@ Each bonus has:
 		const message = err instanceof Error ? err.message : String(err);
 		const stack = err instanceof Error ? err.stack : undefined;
 		log.error(`POST /generate/stream — unhandled error: ${message}`, stack ?? err);
+		return c.json({ error: message }, 500);
+	}
+});
+
+// Non-streaming generation with parallel CLI processes + DB polling
+generateRoutes.post("/", async (c) => {
+	log.info("POST /generate — request received");
+
+	try {
+		const body = await c.req.json<{
+			theme: string;
+			tossupCount: number;
+			bonusCount: number;
+			difficulty: string;
+		}>();
+
+		if (!body.theme || (body.tossupCount === undefined && body.bonusCount === undefined)) {
+			return c.json({ error: "theme and at least one of tossupCount/bonusCount are required" }, 400);
+		}
+
+		const difficulty = body.difficulty || "Regular High School";
+		const db = getDb();
+
+		const set = await db.questionSet.create({
+			data: {
+				name: body.theme,
+				theme: body.theme,
+				difficulty,
+				status: "generating",
+			},
+		});
+
+		log.info(`POST /generate — created set ${set.id}, launching background generation`);
+
+		// Fire-and-forget — generation updates status in DB
+		runGeneration({
+			setId: set.id,
+			theme: body.theme,
+			difficulty,
+			tossupCount: body.tossupCount || 0,
+			bonusCount: body.bonusCount || 0,
+		}).catch((err) => {
+			log.error(`POST /generate — background generation failed for ${set.id}: ${err}`);
+		});
+
+		return c.json({
+			setId: set.id,
+			status: "generating",
+			tossupCount: body.tossupCount || 0,
+			bonusCount: body.bonusCount || 0,
+		});
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		log.error(`POST /generate — error: ${message}`);
 		return c.json({ error: message }, 500);
 	}
 });

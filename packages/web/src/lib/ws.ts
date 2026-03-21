@@ -1,5 +1,5 @@
 // In dev, Vite proxy doesn't reliably forward WS upgrades, so connect directly to API
-const DEV_API_WS = "ws://localhost:7001/ws";
+const DEV_API_WS = `ws://${window.location.hostname}:7001/ws`;
 const PROD_WS =
 	window.location.protocol === "https:"
 		? `wss://${window.location.host}/ws`
@@ -19,6 +19,7 @@ export function createGameSocket(): GameSocket {
 	const ws = new WebSocket(WS_URL);
 	let messageHandler: ((msg: Record<string, unknown>) => void) | null = null;
 	let closeHandler: (() => void) | null = null;
+	let closed = false;
 
 	const ready = new Promise<void>((resolve, reject) => {
 		ws.onopen = () => {
@@ -26,6 +27,7 @@ export function createGameSocket(): GameSocket {
 			resolve();
 		};
 		ws.onerror = (e) => {
+			if (closed) return;
 			console.error("[3roads:ws] error", e);
 			reject(e);
 		};
@@ -42,6 +44,7 @@ export function createGameSocket(): GameSocket {
 	};
 
 	ws.onclose = () => {
+		if (closed) return;
 		console.log("[3roads:ws] disconnected");
 		if (closeHandler) closeHandler();
 	};
@@ -59,6 +62,7 @@ export function createGameSocket(): GameSocket {
 			closeHandler = cb;
 		},
 		close() {
+			closed = true;
 			ws.close();
 		},
 		ready,

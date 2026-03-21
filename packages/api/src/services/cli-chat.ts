@@ -94,13 +94,12 @@ function buildCliArgs(
 	systemPromptPath: string,
 	disallowedTools: string[],
 	prompt: string,
+	outputFormat: "stream-json" | "json" = "stream-json",
 ): string[] {
-	return [
+	const args = [
 		"--print",
 		"--output-format",
-		"stream-json",
-		"--verbose",
-		"--include-partial-messages",
+		outputFormat,
 		"--model",
 		model,
 		"--dangerously-skip-permissions",
@@ -116,8 +115,12 @@ function buildCliArgs(
 		"--no-session-persistence",
 		"--max-turns",
 		"10",
-		prompt,
 	];
+	if (outputFormat === "stream-json") {
+		args.push("--verbose", "--include-partial-messages");
+	}
+	args.push(prompt);
+	return args;
 }
 
 type BlockType = "text" | "tool_use" | "thinking";
@@ -345,6 +348,167 @@ function wireProcessLifecycle(
 		log.error(`cli-chat process error: ${err.message}`, err);
 		finalize(err.message);
 		cleanupDir(invocationDir);
+	});
+}
+
+export async function runCliChat(
+	options: CliChatOptions,
+): Promise<{ ok: boolean; result?: string; error?: string; cost?: number }> {
+	const invocationDir = createInvocationDir();
+	const systemPromptPath = writeSystemPrompt(invocationDir, options.systemPrompt);
+	const model = getCliModel(options.model ?? LLM_MODEL);
+	const mcpConfigPath = writeMcpConfig(invocationDir);
+	const args = buildCliArgs(
+		model,
+		mcpConfigPath,
+		systemPromptPath,
+		BLOCKED_BUILTIN_TOOLS,
+		options.prompt,
+		"json",
+	);
+
+	log.info(`runCliChat START — model=${model} prompt=${options.prompt.length} chars`);
+	const startMs = performance.now();
+
+	return new Promise((resolve) => {
+		let proc: ChildProcessWithoutNullStreams;
+		try {
+			proc = spawnCli(args, invocationDir);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : "Unknown spawn error";
+			log.error(`runCliChat spawn failed: ${msg}`);
+			cleanupDir(invocationDir);
+			resolve({ ok: false, error: msg });
+			return;
+		}
+
+		proc.stdin?.end();
+
+		if (options.signal) {
+			options.signal.addEventListener("abort", () => {
+				log.info(`runCliChat abort signal, killing PID ${proc.pid}`);
+				proc.kill("SIGTERM");
+			});
+		}
+
+		let stdout = "";
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+		});
+		proc.stderr?.on("data", (chunk: Buffer) => {
+			const text = chunk.toString().trim();
+			if (text) log.warn(`runCliChat stderr: ${text.slice(0, 300)}`);
+		});
+
+		proc.on("close", (code) => {
+			const elapsed = (performance.now() - startMs).toFixed(0);
+			log.info(`runCliChat process exited code=${code} elapsed=${elapsed}ms`);
+			cleanupDir(invocationDir);
+
+			try {
+				const parsed = JSON.parse(stdout);
+				const cost = typeof parsed.cost_usd === "number" ? parsed.cost_usd : undefined;
+				if (parsed.is_error) {
+					resolve({ ok: false, error: parsed.result || "CLI error", cost });
+				} else {
+					resolve({ ok: true, result: parsed.result, cost });
+				}
+			} catch {
+				if (code !== 0) {
+					resolve({ ok: false, error: `CLI exited with code ${code}` });
+				} else {
+					resolve({ ok: true, result: stdout });
+				}
+			}
+		});
+
+		proc.on("error", (err) => {
+			log.error(`runCliChat process error: ${err.message}`);
+			cleanupDir(invocationDir);
+			resolve({ ok: false, error: err.message });
+		});
+	});
+}
+
+export async function runCliChatSimple(options: {
+	prompt: string;
+	systemPrompt: string;
+	model?: string;
+}): Promise<string> {
+	const invocationDir = createInvocationDir();
+	const model = getCliModel(options.model ?? LLM_MODEL);
+	const systemPromptPath = writeTempFile(
+		invocationDir,
+		"system-prompt.txt",
+		options.systemPrompt,
+	);
+
+	const args = [
+		"--print",
+		"--output-format",
+		"json",
+		"--model",
+		model,
+		"--dangerously-skip-permissions",
+		"--append-system-prompt-file",
+		systemPromptPath,
+		"--setting-sources",
+		"",
+		"--no-session-persistence",
+		"--max-turns",
+		"1",
+		options.prompt,
+	];
+
+	log.info(`runCliChatSimple START — model=${model} prompt=${options.prompt.length} chars`);
+	const startMs = performance.now();
+
+	return new Promise((resolve, reject) => {
+		let proc: ChildProcessWithoutNullStreams;
+		try {
+			proc = spawnCli(args, invocationDir);
+		} catch (err) {
+			cleanupDir(invocationDir);
+			reject(err);
+			return;
+		}
+
+		proc.stdin?.end();
+
+		let stdout = "";
+		proc.stdout?.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+		});
+		proc.stderr?.on("data", (chunk: Buffer) => {
+			const text = chunk.toString().trim();
+			if (text) log.warn(`runCliChatSimple stderr: ${text.slice(0, 300)}`);
+		});
+
+		proc.on("close", (code) => {
+			const elapsed = (performance.now() - startMs).toFixed(0);
+			log.info(`runCliChatSimple exited code=${code} elapsed=${elapsed}ms`);
+			cleanupDir(invocationDir);
+
+			try {
+				const parsed = JSON.parse(stdout);
+				if (parsed.is_error) {
+					reject(new Error(parsed.result || "CLI error"));
+				} else {
+					resolve(parsed.result || stdout);
+				}
+			} catch {
+				if (code !== 0) {
+					reject(new Error(`CLI exited with code ${code}`));
+				} else {
+					resolve(stdout);
+				}
+			}
+		});
+
+		proc.on("error", (err) => {
+			cleanupDir(invocationDir);
+			reject(err);
+		});
 	});
 }
 
