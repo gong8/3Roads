@@ -93,6 +93,8 @@ export interface GameRoom {
 	lastActivity: number;
 	answerTimer: ReturnType<typeof setTimeout> | null;
 	ttsCache: Map<string, { audioId: string; durationMs: number }>;
+	pendingAudioReady: (() => void) | null;
+	audioReadyTimeout: ReturnType<typeof setTimeout> | null;
 }
 
 // -- Client -> Server messages --
@@ -137,6 +139,10 @@ export interface SkipMsg {
 	type: "skip";
 }
 
+export interface AudioReadyMsg {
+	type: "audio_ready";
+}
+
 export interface EndGameMsg {
 	type: "end_game";
 }
@@ -170,7 +176,8 @@ export type ClientMessage =
 	| EndGameMsg
 	| KickPlayerMsg
 	| SetTeamMsg
-	| UpdateSettingsMsg;
+	| UpdateSettingsMsg
+	| AudioReadyMsg;
 
 // -- Server -> Client messages --
 

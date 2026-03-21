@@ -3,7 +3,7 @@ import type { GameState } from "./useGameRoom";
 
 const API_BASE = import.meta.env.DEV ? `http://${window.location.hostname}:7001` : "";
 
-export function useGameAudio(state: GameState): void {
+export function useGameAudio(state: GameState, sendAudioReady: () => void): void {
 	const audioRef = useRef<HTMLAudioElement | null>(null);
 	const prevPhaseRef = useRef(state.phase);
 
@@ -29,10 +29,15 @@ export function useGameAudio(state: GameState): void {
 		}
 		const a = new Audio(`${API_BASE}${url}`);
 		audioRef.current = a;
+		// Signal server when audio actually starts playing
+		a.addEventListener("playing", () => {
+			console.log("[tts] audio playing — sending audio_ready");
+			sendAudioReady();
+		}, { once: true });
 		a.play().catch((err) => {
 			console.warn("[tts] autoplay blocked:", err);
 		});
-	}, []);
+	}, [sendAudioReady]);
 
 	// Play tossup audio
 	const tossupAudioUrl = state.tossup?.audioUrl;

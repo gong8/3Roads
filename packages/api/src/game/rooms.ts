@@ -111,6 +111,8 @@ export async function createRoom(
 		lastActivity: Date.now(),
 		answerTimer: null,
 		ttsCache: new Map(),
+		pendingAudioReady: null,
+		audioReadyTimeout: null,
 	};
 
 	activeRooms.set(code, room);

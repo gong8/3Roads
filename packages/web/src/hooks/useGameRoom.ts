@@ -341,6 +341,7 @@ export function useGameRoom() {
 	const kickPlayer = useCallback((playerId: string) => send({ type: "kick_player", playerId }), [send]);
 	const setTeam = useCallback((playerId: string, team: "a" | "b") => send({ type: "set_team", playerId, team }), [send]);
 	const updateSettings = useCallback((settings: { strictness?: number; msPerWord?: number }) => send({ type: "update_settings", ...settings }), [send]);
+	const sendAudioReady = useCallback(() => send({ type: "audio_ready" }), [send]);
 	const clearError = useCallback(() => dispatch({ type: "clear_error" }), []);
 	const disconnect = useCallback(() => {
 		socketRef.current?.close();
@@ -361,6 +362,7 @@ export function useGameRoom() {
 		kickPlayer,
 		setTeam,
 		updateSettings,
+		sendAudioReady,
 		clearError,
 		disconnect,
 	};

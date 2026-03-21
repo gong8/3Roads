@@ -46,12 +46,13 @@ export function GameRoom() {
 		kickPlayer,
 		setTeam,
 		updateSettings,
+		sendAudioReady,
 		disconnect,
 	} = useGameRoom();
 
 	const locationState = location.state as LocationState;
 
-	useGameAudio(state);
+	useGameAudio(state, sendAudioReady);
 
 	// Initialize connection on mount
 	useEffect(() => {
@@ -94,23 +95,6 @@ export function GameRoom() {
 		}
 	}, [state.kicked, navigate]);
 
-	// Keyboard shortcuts
-	const handleKeyDown = useCallback(
-		(e: KeyboardEvent) => {
-			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-			if (e.code === "Space" && state.phase === "reading_tossup") {
-				e.preventDefault();
-				buzz();
-			}
-		},
-		[state.phase, buzz],
-	);
-
-	useEffect(() => {
-		window.addEventListener("keydown", handleKeyDown);
-		return () => window.removeEventListener("keydown", handleKeyDown);
-	}, [handleKeyDown]);
-
 	const isModerator = useMemo(() => {
 		return state.players.find((p) => p.id === state.playerId)?.isModerator ?? false;
 	}, [state.players, state.playerId]);
@@ -128,6 +112,31 @@ export function GameRoom() {
 		const controlling = state.players.find((p) => p.id === state.awaitBonusAnswer?.controllingPlayerId);
 		return controlling?.team != null && controlling.team === myPlayer?.team;
 	})();
+
+	const canBuzzBonus = (() => {
+		if (state.phase !== "reading_bonus" || !state.bonus) return false;
+		const controlling = state.players.find((p) => p.name === state.bonus?.controllingPlayerName);
+		if (!controlling || !myPlayer) return false;
+		if (controlling.id === state.playerId) return true;
+		return controlling.team != null && controlling.team === myPlayer.team;
+	})();
+
+	// Keyboard shortcuts
+	const handleKeyDown = useCallback(
+		(e: KeyboardEvent) => {
+			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+			if (e.code === "Space" && (state.phase === "reading_tossup" || canBuzzBonus)) {
+				e.preventDefault();
+				buzz();
+			}
+		},
+		[state.phase, canBuzzBonus, buzz],
+	);
+
+	useEffect(() => {
+		window.addEventListener("keydown", handleKeyDown);
+		return () => window.removeEventListener("keydown", handleKeyDown);
+	}, [handleKeyDown]);
 
 	const displayCode = state.roomCode || roomCode;
 
@@ -250,6 +259,10 @@ export function GameRoom() {
 						totalPoints={state.bonus.totalPoints}
 					/>
 
+					{state.phase === "reading_bonus" && canBuzzBonus && (
+						<BuzzButton onBuzz={buzz} disabled={false} />
+					)}
+
 					{state.phase === "bonus_answering" && canAnswerBonus && state.awaitBonusAnswer && (
 						<AnswerInput onSubmit={submitBonusAnswer} timeMs={state.awaitBonusAnswer.timeMs} label="bonus answer" />
 					)}
@@ -319,6 +332,7 @@ export function GameRoom() {
 						onKick={kickPlayer}
 						onUpdateSettings={updateSettings}
 						players={state.players}
+						ttsEnabled={ttsEnabled}
 					/>
 				</div>
 			)}

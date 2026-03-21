@@ -5,7 +5,9 @@ import {
 	broadcastPlayerList,
 	endGame,
 	handleAnswer,
+	handleAudioReady,
 	handleBonusAnswer,
+	handleBonusBuzz,
 	handleBuzz,
 	nextQuestion,
 	sendTo,
@@ -107,6 +109,9 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 		case "set_team":
 			handleSetTeam(ws, msg.playerId, msg.team);
 			break;
+		case "audio_ready":
+			handleAudioReadyMsg(ws);
+			break;
 		case "update_settings":
 			handleUpdateSettings(ws, msg);
 			break;
@@ -179,6 +184,12 @@ function requireModerator(ws: WebSocket): { room: GameRoom; playerId: string } |
 	return ctx;
 }
 
+function handleAudioReadyMsg(ws: WebSocket): void {
+	const ctx = getContext(ws);
+	if (!ctx) return;
+	handleAudioReady(ctx.room);
+}
+
 function handleStartGame(ws: WebSocket): void {
 	const ctx = requireModerator(ws);
 	if (!ctx) return;
@@ -194,7 +205,11 @@ function handleStartGame(ws: WebSocket): void {
 function handleBuzzMsg(ws: WebSocket): void {
 	const ctx = getContext(ws);
 	if (!ctx) return;
-	handleBuzz(ctx.room, ctx.playerId);
+	if (ctx.room.phase === "reading_bonus") {
+		handleBonusBuzz(ctx.room, ctx.playerId);
+	} else {
+		handleBuzz(ctx.room, ctx.playerId);
+	}
 }
 
 async function handleSubmitAnswer(ws: WebSocket, answer: string): Promise<void> {

@@ -177,11 +177,55 @@ export async function startTossup(room: GameRoom): Promise<void> {
 		audioUrl,
 	});
 
-	// Start word-by-word reveal — first word immediately so it syncs with audio start
-	revealNextWord(room);
-	room.tossupReading.intervalHandle = setInterval(() => {
+	const startWordReveals = () => {
+		// First word immediately so it syncs with audio start
 		revealNextWord(room);
-	}, msPerWord);
+		room.tossupReading!.intervalHandle = setInterval(() => {
+			revealNextWord(room);
+		}, msPerWord);
+	};
+
+	if (audioUrl) {
+		// TTS enabled — wait for client to signal audio is actually playing
+		waitForAudioReady(room, startWordReveals);
+	} else {
+		startWordReveals();
+	}
+}
+
+const AUDIO_READY_TIMEOUT_MS = 3000;
+
+function waitForAudioReady(room: GameRoom, callback: () => void): void {
+	room.pendingAudioReady = callback;
+	room.audioReadyTimeout = setTimeout(() => {
+		if (room.pendingAudioReady) {
+			log.warn(`Room ${room.code} — audio_ready timeout, starting word reveals anyway`);
+			const fn = room.pendingAudioReady;
+			room.pendingAudioReady = null;
+			room.audioReadyTimeout = null;
+			fn();
+		}
+	}, AUDIO_READY_TIMEOUT_MS);
+}
+
+function cancelPendingAudioReady(room: GameRoom): void {
+	if (room.audioReadyTimeout) {
+		clearTimeout(room.audioReadyTimeout);
+		room.audioReadyTimeout = null;
+	}
+	room.pendingAudioReady = null;
+}
+
+export function handleAudioReady(room: GameRoom): void {
+	if (room.pendingAudioReady) {
+		if (room.audioReadyTimeout) {
+			clearTimeout(room.audioReadyTimeout);
+			room.audioReadyTimeout = null;
+		}
+		const fn = room.pendingAudioReady;
+		room.pendingAudioReady = null;
+		fn();
+	}
 }
 
 function revealNextWord(room: GameRoom): void {
@@ -230,7 +274,8 @@ export function handleBuzz(room: GameRoom, playerId: string): void {
 		return;
 	}
 
-	// Stop word reveal
+	// Stop word reveal (or cancel pending start)
+	cancelPendingAudioReady(room);
 	if (tr.intervalHandle) {
 		clearInterval(tr.intervalHandle);
 		tr.intervalHandle = null;
@@ -381,6 +426,7 @@ function tossupDead(room: GameRoom): void {
 	const tr = room.tossupReading;
 	if (!tr) return;
 
+	cancelPendingAudioReady(room);
 	if (tr.intervalHandle) {
 		clearInterval(tr.intervalHandle);
 		tr.intervalHandle = null;
@@ -447,30 +493,39 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 		}
 	}
 
-	let i = 0;
 	const br = room.bonusReading;
-	// First word immediately so it syncs with audio start
-	if (leadinWords.length > 0) {
-		broadcast(room, { type: "bonus_word_reveal", word: leadinWords[0] });
-		i = 1;
-	}
-	br.intervalHandle = setInterval(() => {
-		if (i < leadinWords.length) {
-			broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
-			i++;
-		} else {
-			if (br.intervalHandle) {
-				clearInterval(br.intervalHandle);
-				br.intervalHandle = null;
-			}
-			// Brief pause after leadin finishes before first part
-			// When TTS enabled, remaining audio ≈ one word duration; otherwise use fixed delay
-			const leadinPause = room.settings.ttsEnabled ? Math.max(leadinMsPerWord, 500) : 1000;
-			setTimeout(() => {
-				sendBonusPart(room);
-			}, leadinPause);
+
+	const startLeadinReveals = () => {
+		let i = 0;
+		// First word immediately so it syncs with audio start
+		if (leadinWords.length > 0) {
+			broadcast(room, { type: "bonus_word_reveal", word: leadinWords[0] });
+			i = 1;
 		}
-	}, leadinMsPerWord);
+		br.intervalHandle = setInterval(() => {
+			if (i < leadinWords.length) {
+				broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
+				i++;
+			} else {
+				if (br.intervalHandle) {
+					clearInterval(br.intervalHandle);
+					br.intervalHandle = null;
+				}
+				// Brief pause after leadin finishes before first part
+				// When TTS enabled, remaining audio ≈ one word duration; otherwise use fixed delay
+				const leadinPause = room.settings.ttsEnabled ? Math.max(leadinMsPerWord, 500) : 1000;
+				setTimeout(() => {
+					sendBonusPart(room);
+				}, leadinPause);
+			}
+		}, leadinMsPerWord);
+	};
+
+	if (audioUrl) {
+		waitForAudioReady(room, startLeadinReveals);
+	} else {
+		startLeadinReveals();
+	}
 }
 
 async function sendBonusPart(room: GameRoom): Promise<void> {
@@ -515,38 +570,84 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 		}
 	}
 
-	// Reveal part text word-by-word, then open for answering
-	// First word immediately so it syncs with audio start
-	let i = 0;
-	if (partWords.length > 0) {
-		broadcast(room, { type: "bonus_word_reveal", word: partWords[0] });
-		i = 1;
-	}
-	br.intervalHandle = setInterval(() => {
-		if (i < partWords.length) {
-			broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
-			i++;
-		} else {
-			if (br.intervalHandle) {
-				clearInterval(br.intervalHandle);
-				br.intervalHandle = null;
-			}
-			// Now open for answering
-			room.phase = "bonus_answering";
-			broadcast(room, { type: "phase_change", phase: "bonus_answering" });
-			broadcast(room, {
-				type: "await_bonus_answer",
-				controllingPlayerId: br.controllingPlayerId,
-				timeMs: room.settings.bonusAnswerTimeMs,
-			});
-
-			room.answerTimer = setTimeout(() => {
-				if (room.phase === "bonus_answering" && room.bonusReading === br) {
-					handleBonusAnswer(room, "");
-				}
-			}, room.settings.bonusAnswerTimeMs);
+	const startPartReveals = () => {
+		// First word immediately so it syncs with audio start
+		let i = 0;
+		if (partWords.length > 0) {
+			broadcast(room, { type: "bonus_word_reveal", word: partWords[0] });
+			i = 1;
 		}
-	}, partMsPerWord);
+		br.intervalHandle = setInterval(() => {
+			if (i < partWords.length) {
+				broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
+				i++;
+			} else {
+				if (br.intervalHandle) {
+					clearInterval(br.intervalHandle);
+					br.intervalHandle = null;
+				}
+				// Now open for answering
+				room.phase = "bonus_answering";
+				broadcast(room, { type: "phase_change", phase: "bonus_answering" });
+				broadcast(room, {
+					type: "await_bonus_answer",
+					controllingPlayerId: br.controllingPlayerId,
+					timeMs: room.settings.bonusAnswerTimeMs,
+				});
+
+				room.answerTimer = setTimeout(() => {
+					if (room.phase === "bonus_answering" && room.bonusReading === br) {
+						handleBonusAnswer(room, "");
+					}
+				}, room.settings.bonusAnswerTimeMs);
+			}
+		}, partMsPerWord);
+	};
+
+	if (audioUrl) {
+		waitForAudioReady(room, startPartReveals);
+	} else {
+		startPartReveals();
+	}
+}
+
+export function handleBonusBuzz(room: GameRoom, playerId: string): void {
+	const br = room.bonusReading;
+	if (!br) return;
+	if (room.phase !== "reading_bonus") return;
+
+	// Only allow controlling player (or teammate in team mode) to buzz
+	const player = room.players.get(playerId);
+	if (!player) return;
+
+	if (room.mode === "ffa") {
+		if (br.controllingPlayerId !== playerId) return;
+	} else {
+		const controlling = room.players.get(br.controllingPlayerId);
+		if (controlling?.team !== player.team) return;
+	}
+
+	// Stop word reveal
+	if (br.intervalHandle) {
+		clearInterval(br.intervalHandle);
+		br.intervalHandle = null;
+	}
+
+	// Transition to bonus answering
+	room.phase = "bonus_answering";
+	room.lastActivity = Date.now();
+	broadcast(room, { type: "phase_change", phase: "bonus_answering" });
+	broadcast(room, {
+		type: "await_bonus_answer",
+		controllingPlayerId: br.controllingPlayerId,
+		timeMs: room.settings.bonusAnswerTimeMs,
+	});
+
+	room.answerTimer = setTimeout(() => {
+		if (room.phase === "bonus_answering" && room.bonusReading === br) {
+			handleBonusAnswer(room, "");
+		}
+	}, room.settings.bonusAnswerTimeMs);
 }
 
 export async function handleBonusAnswer(room: GameRoom, answer: string): Promise<void> {
@@ -644,6 +745,7 @@ function advanceToNextQuestion(room: GameRoom): void {
 }
 
 export function skipQuestion(room: GameRoom): void {
+	cancelPendingAudioReady(room);
 	const tr = room.tossupReading;
 	if (tr?.intervalHandle) {
 		clearInterval(tr.intervalHandle);
@@ -667,6 +769,7 @@ export function skipQuestion(room: GameRoom): void {
 }
 
 export function endGame(room: GameRoom): void {
+	cancelPendingAudioReady(room);
 	if (room.tossupReading?.intervalHandle) {
 		clearInterval(room.tossupReading.intervalHandle);
 	}
