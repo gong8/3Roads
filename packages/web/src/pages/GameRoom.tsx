@@ -6,6 +6,7 @@ import { AnswerInput } from "../components/game/AnswerInput";
 import { BonusReader } from "../components/game/BonusReader";
 import { BuzzButton } from "../components/game/BuzzButton";
 import { ModeratorPanel } from "../components/game/ModeratorPanel";
+import { QuestionHistory } from "../components/game/QuestionHistory";
 import { Scoreboard } from "../components/game/Scoreboard";
 import { TeamAssignment } from "../components/game/TeamAssignment";
 import { TossupReader } from "../components/game/TossupReader";
@@ -162,20 +163,8 @@ export function GameRoom() {
 					{isTeamMode && (
 						<TeamAssignment players={state.players} isModerator={isModerator} onSetTeam={setTeam} />
 					)}
-					{isModerator && (
-						<ModeratorPanel
-							phase={state.phase}
-							onSkip={skip}
-							onNext={nextQuestion}
-							onEndGame={endGame}
-							onKick={kickPlayer}
-							onUpdateSettings={updateSettings}
-							players={state.players}
-							ttsEnabled={ttsEnabled}
-						/>
-					)}
 					{isModerator && state.players.length >= 1 && (
-						<button type="button" onClick={startGame} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
+						<button type="button" onClick={startGame} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white mt-4">
 							start game
 						</button>
 					)}
@@ -323,23 +312,26 @@ export function GameRoom() {
 				</div>
 			)}
 
-			{/* Moderator controls */}
-			{isModerator && state.phase !== "lobby" && state.phase !== "game_over" && (
-				<div className="mt-4">
-					<ModeratorPanel
-						phase={state.phase}
-						onSkip={skip}
-						onNext={nextQuestion}
-						onEndGame={endGame}
-						onKick={kickPlayer}
-						onUpdateSettings={updateSettings}
-						players={state.players}
-						ttsEnabled={ttsEnabled}
-					/>
-				</div>
+			{/* Moderator controls (fixed drawer) */}
+			{isModerator && state.phase !== "game_over" && (
+				<ModeratorPanel
+					phase={state.phase}
+					onSkip={skip}
+					onNext={nextQuestion}
+					onEndGame={endGame}
+					onKick={kickPlayer}
+					onUpdateSettings={updateSettings}
+					players={state.players}
+					ttsEnabled={ttsEnabled}
+				/>
 			)}
 
 			{state.error && <div className="mt-3 text-red-700 text-xs">{state.error}</div>}
+
+			{/* Question History */}
+			{state.phase !== "lobby" && (
+				<QuestionHistory history={state.history} />
+			)}
 		</div>
 	);
 }

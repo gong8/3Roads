@@ -239,11 +239,14 @@ export interface AnswerResultEvt {
 	answer: string;
 	correct: boolean;
 	points: number;
+	buzzWordIndex: number;
+	words?: string[];
 }
 
 export interface TossupDeadEvt {
 	type: "tossup_dead";
 	answer: string;
+	words: string[];
 }
 
 export interface BonusStartEvt {
@@ -276,6 +279,7 @@ export interface BonusPartResultEvt {
 	answer: string;
 	submittedAnswer: string;
 	points: number;
+	partText: string;
 }
 
 export interface BonusCompleteEvt {

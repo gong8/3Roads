@@ -17,7 +17,7 @@ export function TossupReader({ words, isPowerZone, category, subcategory, questi
 			<p className="whitespace-pre-wrap min-h-[3rem]">
 				{words.map((word, i) => (
 					<span key={i} className={isPowerZone && i < words.length ? "font-bold" : ""}>
-						{i > 0 ? " " : ""}{word}
+						{i > 0 ? " " : ""}{word.replace(/\(\*\)/g, "")}
 					</span>
 				))}
 				<span className="animate-pulse">|</span>

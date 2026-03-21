@@ -399,6 +399,8 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 			answer,
 			correct: true,
 			points,
+			buzzWordIndex: tr.buzzWordIndex!,
+			words: tr.words,
 		});
 
 		broadcastPlayerList(room);
@@ -429,6 +431,7 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 			answer,
 			correct: false,
 			points: -5,
+			buzzWordIndex: tr.buzzWordIndex!,
 		});
 
 		broadcastPlayerList(room);
@@ -484,7 +487,7 @@ function tossupDead(room: GameRoom): void {
 		tr.intervalHandle = null;
 	}
 
-	broadcast(room, { type: "tossup_dead", answer: tr.answer });
+	broadcast(room, { type: "tossup_dead", answer: tr.answer, words: tr.words });
 	advanceToNextQuestion(room);
 }
 
@@ -764,6 +767,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 		answer: part.answer,
 		submittedAnswer: answer,
 		points,
+		partText: part.text,
 	});
 
 	broadcastPlayerList(room);
@@ -828,7 +832,7 @@ export function skipQuestion(room: GameRoom): void {
 	}
 
 	if (room.tossupReading) {
-		broadcast(room, { type: "tossup_dead", answer: room.tossupReading.answer });
+		broadcast(room, { type: "tossup_dead", answer: room.tossupReading.answer, words: room.tossupReading.words });
 	}
 
 	advanceToNextQuestion(room);

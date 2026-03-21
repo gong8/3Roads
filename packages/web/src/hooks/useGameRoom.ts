@@ -31,6 +31,7 @@ interface TossupState {
 	category: string;
 	subcategory: string;
 	words: string[];
+	currentBuzzes: { playerName: string; buzzWordIndex: number; correct: boolean; points: number; answer: string }[];
 	isPowerZone: boolean;
 	audioUrl?: string;
 }
@@ -43,7 +44,7 @@ interface BonusState {
 	subcategory: string;
 	words: string[];
 	currentPart: { partNumber: number; value: number; audioUrl?: string } | null;
-	partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number }[];
+	partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText?: string }[];
 	totalPoints: number | null;
 	audioUrl?: string;
 }
@@ -54,6 +55,22 @@ interface AnswerResult {
 	answer: string;
 	correct: boolean;
 	points: number;
+}
+
+export interface HistoryEntry {
+	type: "tossup" | "bonus";
+	questionNumber: number;
+	category: string;
+	subcategory: string;
+	// Tossup fields
+	questionText?: string;
+	answer: string;
+	buzzes?: { playerName: string; buzzWordIndex: number; correct: boolean; points: number; answer: string }[];
+	dead?: boolean;
+	// Bonus fields
+	controllingPlayer?: string;
+	partResults?: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText?: string }[];
+	totalBonusPoints?: number;
 }
 
 export interface GameState {
@@ -74,6 +91,7 @@ export interface GameState {
 	kicked: boolean;
 	neggedPlayerIds: Set<string>;
 	ttsProgress: { current: number; total: number; etaMs?: number } | null;
+	history: HistoryEntry[];
 }
 
 type Action =
@@ -86,12 +104,12 @@ type Action =
 	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string; audioUrl?: string }
 	| { type: "word_reveal"; wordIndex: number; word: string; isPowerZone: boolean }
 	| { type: "player_buzzed"; playerId: string; playerName: string }
-	| { type: "answer_result"; playerId: string; playerName: string; answer: string; correct: boolean; points: number }
-	| { type: "tossup_dead"; answer: string }
+	| { type: "answer_result"; playerId: string; playerName: string; answer: string; correct: boolean; points: number; buzzWordIndex: number; words?: string[] }
+	| { type: "tossup_dead"; answer: string; words?: string[] }
 	| { type: "bonus_start"; leadin: string; controllingPlayerName: string; controllingTeam?: Team; category: string; subcategory: string; audioUrl?: string }
 	| { type: "bonus_part"; partNumber: number; totalWords: number; value: number; audioUrl?: string }
 	| { type: "bonus_word_reveal"; word: string }
-	| { type: "bonus_part_result"; partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number }
+	| { type: "bonus_part_result"; partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText: string }
 	| { type: "bonus_complete"; totalBonusPoints: number }
 	| { type: "game_over"; players: PlayerInfo[] }
 	| { type: "error"; message: string }
@@ -122,6 +140,7 @@ const initialState: GameState = {
 	kicked: false,
 	neggedPlayerIds: new Set(),
 	ttsProgress: null,
+	history: [],
 };
 
 function reducer(state: GameState, action: Action): GameState {
@@ -156,6 +175,7 @@ function reducer(state: GameState, action: Action): GameState {
 					category: action.category,
 					subcategory: action.subcategory,
 					words: [],
+					currentBuzzes: [],
 					isPowerZone: true,
 					audioUrl: action.audioUrl,
 				},
@@ -163,6 +183,8 @@ function reducer(state: GameState, action: Action): GameState {
 				deadAnswer: null,
 				bonus: null,
 				neggedPlayerIds: new Set(),
+				// Reset history on first question of a new game
+				...(action.questionNumber === 1 ? { history: [] } : {}),
 			};
 		case "word_reveal":
 			if (!state.tossup) return state;
@@ -179,9 +201,32 @@ function reducer(state: GameState, action: Action): GameState {
 		case "answer_result": {
 			const neggedPlayerIds = new Set(state.neggedPlayerIds);
 			if (!action.correct) neggedPlayerIds.add(action.playerId);
+			const newBuzz = {
+				playerName: action.playerName,
+				buzzWordIndex: action.buzzWordIndex,
+				correct: action.correct,
+				points: action.points,
+				answer: action.answer,
+			};
+			const currentBuzzes = state.tossup ? [...state.tossup.currentBuzzes, newBuzz] : [];
+			// Add tossup result to history when correct (incorrect buzzes don't end the tossup)
+			const historyAfterResult = action.correct && state.tossup
+				? [...state.history, {
+					type: "tossup" as const,
+					questionNumber: state.tossup.questionNumber,
+					category: state.tossup.category,
+					subcategory: state.tossup.subcategory,
+					questionText: action.words?.join(" ") ?? state.tossup.words.join(" "),
+					answer: action.answer,
+					buzzes: currentBuzzes,
+					dead: false,
+				}]
+				: state.history;
 			return {
 				...state,
 				neggedPlayerIds,
+				history: historyAfterResult,
+				tossup: state.tossup ? { ...state.tossup, currentBuzzes } : null,
 				lastResult: {
 					playerId: action.playerId,
 					playerName: action.playerName,
@@ -193,7 +238,23 @@ function reducer(state: GameState, action: Action): GameState {
 			};
 		}
 		case "tossup_dead":
-			return { ...state, deadAnswer: action.answer, tossup: state.tossup ? { ...state.tossup } : null };
+			return {
+				...state,
+				deadAnswer: action.answer,
+				tossup: state.tossup ? { ...state.tossup } : null,
+				history: state.tossup
+					? [...state.history, {
+						type: "tossup" as const,
+						questionNumber: state.tossup.questionNumber,
+						category: state.tossup.category,
+						subcategory: state.tossup.subcategory,
+						questionText: action.words?.join(" ") ?? state.tossup.words.join(" "),
+						answer: action.answer,
+						buzzes: state.tossup.currentBuzzes,
+						dead: true,
+					}]
+					: state.history,
+			};
 		case "bonus_start":
 			return {
 				...state,
@@ -244,13 +305,27 @@ function reducer(state: GameState, action: Action): GameState {
 							answer: action.answer,
 							submittedAnswer: action.submittedAnswer,
 							points: action.points,
+							partText: action.partText,
 						},
 					],
 				},
 			};
 		case "bonus_complete":
 			if (!state.bonus) return state;
-			return { ...state, bonus: { ...state.bonus, totalPoints: action.totalBonusPoints } };
+			return {
+				...state,
+				bonus: { ...state.bonus, totalPoints: action.totalBonusPoints },
+				history: [...state.history, {
+					type: "bonus" as const,
+					questionNumber: state.tossup?.questionNumber ?? 0,
+					category: state.bonus.category,
+					subcategory: state.bonus.subcategory,
+					answer: "",
+					controllingPlayer: state.bonus.controllingPlayerName,
+					partResults: state.bonus.partResults,
+					totalBonusPoints: action.totalBonusPoints,
+				}],
+			};
 		case "game_over":
 			return { ...state, gameOverPlayers: action.players };
 		case "error":
