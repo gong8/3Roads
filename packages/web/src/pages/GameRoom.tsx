@@ -16,6 +16,8 @@ interface CreateState {
 	playerName: string;
 	mode: "ffa" | "teams";
 	ttsEnabled?: boolean;
+	leniency?: number;
+	readingSpeed?: number;
 }
 
 interface JoinState {
@@ -62,6 +64,12 @@ export function GameRoom() {
 
 		if (locationState.action === "create") {
 			createRoom(locationState.questionSetId, locationState.playerName, locationState.mode, locationState.ttsEnabled ?? false);
+			if (locationState.leniency != null || locationState.readingSpeed != null) {
+				updateSettings({
+					...(locationState.leniency != null && { strictness: locationState.leniency }),
+					...(locationState.readingSpeed != null && { msPerWord: locationState.readingSpeed }),
+				});
+			}
 		} else if (locationState.action === "join" && roomCode) {
 			joinRoom(roomCode, locationState.playerName);
 		}
@@ -70,7 +78,7 @@ export function GameRoom() {
 			initRef.current = false;
 			disconnect();
 		};
-	}, [locationState, roomCode, createRoom, joinRoom, navigate, disconnect]);
+	}, [locationState, roomCode, createRoom, joinRoom, navigate, disconnect, updateSettings]);
 
 	// When room is created, update URL to actual room code
 	useEffect(() => {
@@ -109,6 +117,7 @@ export function GameRoom() {
 
 	const myPlayer = state.players.find((p) => p.id === state.playerId);
 	const isTeamMode = state.players.some((p) => p.team != null);
+	const ttsEnabled = locationState?.action === "create" ? (locationState.ttsEnabled ?? false) : false;
 
 	const canBuzz = state.phase === "reading_tossup" && !state.neggedPlayerIds.has(state.playerId ?? "");
 	const isMyBuzz = state.awaitAnswer?.playerId === state.playerId;
@@ -152,6 +161,7 @@ export function GameRoom() {
 							onKick={kickPlayer}
 							onUpdateSettings={updateSettings}
 							players={state.players}
+							ttsEnabled={ttsEnabled}
 						/>
 					)}
 					{isModerator && state.players.length >= 1 && (

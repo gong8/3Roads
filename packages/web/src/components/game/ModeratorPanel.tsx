@@ -8,9 +8,10 @@ interface Props {
 	onKick: (playerId: string) => void;
 	onUpdateSettings: (settings: { strictness?: number; msPerWord?: number }) => void;
 	players: { id: string; name: string; isModerator: boolean }[];
+	ttsEnabled?: boolean;
 }
 
-export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpdateSettings, players }: Props) {
+export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpdateSettings, players, ttsEnabled }: Props) {
 	const kickable = players.filter((p) => !p.isModerator);
 	const [leniency, setLeniency] = useState(7);
 	const [readingSpeed, setReadingSpeed] = useState(300);
@@ -52,6 +53,7 @@ export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpd
 						className="w-48"
 					/>
 				</div>
+				{!ttsEnabled && (
 				<div>
 					<label className="text-xs text-gray-500 block mb-1">
 						reading speed: {(1000 / readingSpeed).toFixed(1)} words/s
@@ -74,6 +76,7 @@ export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpd
 						<span>fast</span>
 					</div>
 				</div>
+			)}
 			</div>
 			{kickable.length > 0 && (
 				<div className="mt-2">

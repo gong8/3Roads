@@ -12,6 +12,8 @@ export function Play() {
 	const [selectedSetId, setSelectedSetId] = useState("");
 	const [mode, setMode] = useState<"ffa" | "teams">("ffa");
 	const [ttsEnabled, setTtsEnabled] = useState(false);
+	const [leniency, setLeniency] = useState(7);
+	const [readingSpeed, setReadingSpeed] = useState(300);
 	const [error, setError] = useState<string | null>(null);
 
 	const { data: sets } = useSets();
@@ -20,7 +22,7 @@ export function Play() {
 		if (!name.trim()) { setError("enter a name"); return; }
 		if (!selectedSetId) { setError("select a question set"); return; }
 		navigate("/play/new", {
-			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled },
+			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled, leniency, readingSpeed },
 		});
 	};
 
@@ -89,8 +91,40 @@ export function Play() {
 								checked={ttsEnabled}
 								onChange={(e) => setTtsEnabled(e.target.checked)}
 							/>
-							text-to-speech (requires Fish Speech server)
+							text-to-speech
 						</label>
+					</div>
+					<div className="mb-3">
+						<label className="text-xs text-gray-500 block mb-1">
+							leniency: {leniency}/10
+						</label>
+						<input
+							type="range"
+							min={1}
+							max={10}
+							step={1}
+							value={leniency}
+							onChange={(e) => setLeniency(Number(e.target.value))}
+							className="w-48"
+						/>
+					</div>
+					<div className="mb-3">
+						<label className="text-xs text-gray-500 block mb-1">
+							reading speed: {(1000 / readingSpeed).toFixed(1)} words/s
+						</label>
+						<input
+							type="range"
+							min={100}
+							max={500}
+							step={50}
+							value={600 - readingSpeed}
+							onChange={(e) => setReadingSpeed(600 - Number(e.target.value))}
+							className="w-48"
+						/>
+						<div className="text-xs text-gray-400 flex justify-between w-48">
+							<span>slow</span>
+							<span>fast</span>
+						</div>
 					</div>
 					<button type="button" onClick={handleCreate} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
 						create room

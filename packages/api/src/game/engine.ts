@@ -177,7 +177,8 @@ export async function startTossup(room: GameRoom): Promise<void> {
 		audioUrl,
 	});
 
-	// Start word-by-word reveal
+	// Start word-by-word reveal — first word immediately so it syncs with audio start
+	revealNextWord(room);
 	room.tossupReading.intervalHandle = setInterval(() => {
 		revealNextWord(room);
 	}, msPerWord);
@@ -438,8 +439,21 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 
 	// Reveal leadin word-by-word, then start first part
 	const leadinWords = bonus.leadin.split(/\s+/);
+	let leadinMsPerWord = room.settings.msPerWord;
+	if (room.settings.ttsEnabled) {
+		const cachedLeadin = room.ttsCache.get(`bonus-leadin:${bonus.id}`);
+		if (cachedLeadin) {
+			leadinMsPerWord = cachedLeadin.durationMs / leadinWords.length;
+		}
+	}
+
 	let i = 0;
 	const br = room.bonusReading;
+	// First word immediately so it syncs with audio start
+	if (leadinWords.length > 0) {
+		broadcast(room, { type: "bonus_word_reveal", word: leadinWords[0] });
+		i = 1;
+	}
 	br.intervalHandle = setInterval(() => {
 		if (i < leadinWords.length) {
 			broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
@@ -450,11 +464,13 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 				br.intervalHandle = null;
 			}
 			// Brief pause after leadin finishes before first part
+			// When TTS enabled, remaining audio ≈ one word duration; otherwise use fixed delay
+			const leadinPause = room.settings.ttsEnabled ? Math.max(leadinMsPerWord, 500) : 1000;
 			setTimeout(() => {
 				sendBonusPart(room);
-			}, 1000);
+			}, leadinPause);
 		}
-	}, room.settings.msPerWord);
+	}, leadinMsPerWord);
 }
 
 async function sendBonusPart(room: GameRoom): Promise<void> {
@@ -488,8 +504,24 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 		audioUrl,
 	});
 
+	// Compute word timing from TTS cache when available
+	let partMsPerWord = room.settings.msPerWord;
+	if (room.settings.ttsEnabled) {
+		const bonus = room.bonuses[br.bonusIndex];
+		const partNum = bonus.parts[br.currentPart]?.partNum ?? br.currentPart + 1;
+		const cachedPart = room.ttsCache.get(`bonus-part:${bonus.id}:${partNum}`);
+		if (cachedPart) {
+			partMsPerWord = cachedPart.durationMs / partWords.length;
+		}
+	}
+
 	// Reveal part text word-by-word, then open for answering
+	// First word immediately so it syncs with audio start
 	let i = 0;
+	if (partWords.length > 0) {
+		broadcast(room, { type: "bonus_word_reveal", word: partWords[0] });
+		i = 1;
+	}
 	br.intervalHandle = setInterval(() => {
 		if (i < partWords.length) {
 			broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
@@ -514,7 +546,7 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 				}
 			}, room.settings.bonusAnswerTimeMs);
 		}
-	}, room.settings.msPerWord);
+	}, partMsPerWord);
 }
 
 export async function handleBonusAnswer(room: GameRoom, answer: string): Promise<void> {

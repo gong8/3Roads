@@ -1,4 +1,6 @@
 import { createServer } from "node:http";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { extname, join } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { createLogger, getDb, initDb } from "@3roads/shared";
 import { Hono } from "hono";
@@ -90,7 +92,46 @@ app.get("/audio/:id", (c) => {
 
 app.get("/game/rooms", (c) => c.json(getActiveRoomsList()));
 
-app.get("/", (c) => c.json({ name: "3roads-api", version: "0.0.1" }));
+// --- Static file serving for tunnel/production mode ---
+const STATIC_DIR = process.env.SERVE_STATIC;
+
+if (!STATIC_DIR) {
+	app.get("/", (c) => c.json({ name: "3roads-api", version: "0.0.1" }));
+} else {
+	const MIME: Record<string, string> = {
+		".html": "text/html; charset=utf-8",
+		".js": "application/javascript",
+		".css": "text/css",
+		".json": "application/json",
+		".png": "image/png",
+		".jpg": "image/jpeg",
+		".svg": "image/svg+xml",
+		".ico": "image/x-icon",
+		".woff": "font/woff",
+		".woff2": "font/woff2",
+		".wasm": "application/wasm",
+		".webp": "image/webp",
+		".mp3": "audio/mpeg",
+		".wav": "audio/wav",
+	};
+
+	app.get("*", (c) => {
+		const reqPath = c.req.path === "/" ? "/index.html" : c.req.path;
+		const filePath = join(STATIC_DIR, reqPath);
+		try {
+			if (existsSync(filePath) && statSync(filePath).isFile()) {
+				const content = readFileSync(filePath);
+				const mime = MIME[extname(filePath)] || "application/octet-stream";
+				return c.body(content, 200, { "Content-Type": mime });
+			}
+		} catch {}
+		// SPA fallback — serve index.html for client-side routing
+		const html = readFileSync(join(STATIC_DIR, "index.html"), "utf-8");
+		return c.html(html);
+	});
+
+	log.info(`Serving static files from ${STATIC_DIR}`);
+}
 
 const port = Number(process.env.PORT) || 7001;
 

@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { API_BASE } from "../lib/api";
 import { streamSSE } from "../lib/sse";
 
 interface StreamEvent {
@@ -63,7 +64,7 @@ export function useGenerationStream() {
     });
 
     try {
-      for await (const { event, data } of streamSSE("/api/generate/stream", { theme, tossupCount, bonusCount, difficulty }, controller.signal)) {
+      for await (const { event, data } of streamSSE(`${API_BASE}/generate/stream`, { theme, tossupCount, bonusCount, difficulty }, controller.signal)) {
         if (event === "done") {
           console.log("[3roads:gen]", "received done event, breaking");
           break;
