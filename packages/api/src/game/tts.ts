@@ -1,13 +1,20 @@
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { createLogger } from "@3roads/shared";
 
 const log = createLogger("api:game:tts");
 
-const FISH_SPEECH_URL = process.env.FISH_SPEECH_URL || "http://localhost:8080";
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const MODEL_DIR = resolve(__dirname, "../../../../data/models/kokoro-en-v0_19");
+import { existsSync } from "node:fs";
+const WORKER_TS = resolve(__dirname, "tts-worker.ts");
+const WORKER_JS = resolve(__dirname, "tts-worker.js");
+const WORKER_PATH = existsSync(WORKER_TS) ? WORKER_TS : WORKER_JS;
 
 // In-memory audio cache with auto-cleanup
 const audioCache = new Map<string, { buffer: Buffer; expires: number }>();
-
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 function generateId(): string {
 	return Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
@@ -43,72 +50,66 @@ setInterval(() => {
 	}
 }, 60_000);
 
-/**
- * Calculate WAV duration from buffer.
- * Standard WAV header is 44 bytes. We read sample rate, channels, and bits per sample from the header.
- */
-function wavDurationMs(buf: Buffer): number {
-	if (buf.length < 44) return 0;
-	const sampleRate = buf.readUInt32LE(24);
-	const channels = buf.readUInt16LE(22);
-	const bitsPerSample = buf.readUInt16LE(34);
-	const bytesPerSample = bitsPerSample / 8;
-	const dataSize = buf.length - 44;
-	if (sampleRate === 0 || channels === 0 || bytesPerSample === 0) return 0;
-	return (dataSize / (sampleRate * channels * bytesPerSample)) * 1000;
-}
+// Worker-based TTS
+let worker: Worker | null = null;
+let workerReady: Promise<void> | null = null;
+let nextId = 0;
+const pending = new Map<number, { resolve: (v: { wav: Buffer; durationMs: number }) => void; reject: (e: Error) => void }>();
 
-// Track whether Fish Speech is reachable
-let fishReady = false;
-let fishCheckPromise: Promise<void> | null = null;
+function ensureWorker(): Promise<void> {
+	if (workerReady) return workerReady;
 
-async function waitForFishSpeech(): Promise<void> {
-	if (fishReady) return;
-	if (fishCheckPromise) return fishCheckPromise;
+	workerReady = new Promise((resolveReady, rejectReady) => {
+		log.info("Spawning TTS worker...");
+		const isTsFile = WORKER_PATH.endsWith(".ts");
+		const w = new Worker(WORKER_PATH, {
+			workerData: { modelDir: MODEL_DIR },
+			...(isTsFile ? { execArgv: ["--import", "tsx"] } : {}),
+		});
 
-	fishCheckPromise = (async () => {
-		log.info("Waiting for Fish Speech server...");
-		for (let i = 0; i < 60; i++) {
-			try {
-				const res = await fetch(`${FISH_SPEECH_URL}/v1/health`, { signal: AbortSignal.timeout(2000) });
-				if (res.ok) {
-					fishReady = true;
-					log.info("Fish Speech server is ready");
-					return;
-				}
-			} catch {
-				// not ready yet
+		w.on("message", (msg: any) => {
+			if (msg.type === "ready") {
+				log.info("TTS worker ready");
+				worker = w;
+				resolveReady();
+				return;
 			}
-			await new Promise((r) => setTimeout(r, 3000));
-		}
-		throw new Error("Fish Speech server did not become ready within 3 minutes");
-	})();
+			if (msg.type === "result") {
+				const p = pending.get(msg.id);
+				if (p) {
+					pending.delete(msg.id);
+					p.resolve({ wav: msg.wav, durationMs: msg.durationMs });
+				}
+			}
+		});
 
-	try {
-		await fishCheckPromise;
-	} finally {
-		fishCheckPromise = null;
-	}
+		w.on("error", (err) => {
+			log.error(`TTS worker error: ${err.message}`);
+			rejectReady(err);
+			for (const p of pending.values()) p.reject(err);
+			pending.clear();
+		});
+
+		w.on("exit", (code) => {
+			log.warn(`TTS worker exited with code ${code}`);
+			worker = null;
+			workerReady = null;
+		});
+	});
+
+	return workerReady;
 }
 
 export async function generateTTS(text: string): Promise<{ audio: Buffer; durationMs: number }> {
-	await waitForFishSpeech();
+	await ensureWorker();
+	if (!worker) throw new Error("TTS worker not available");
 
-	const res = await fetch(`${FISH_SPEECH_URL}/v1/tts`, {
-		method: "POST",
-		headers: { "Content-Type": "application/json" },
-		body: JSON.stringify({ text, format: "wav" }),
+	const id = nextId++;
+	return new Promise((resolve, reject) => {
+		pending.set(id, { resolve: (v) => {
+			log.info(`TTS generated: ${text.length} chars → ${v.wav.length} bytes, ${Math.round(v.durationMs)}ms`);
+			resolve({ audio: v.wav, durationMs: v.durationMs });
+		}, reject });
+		worker!.postMessage({ id, text });
 	});
-
-	if (!res.ok) {
-		throw new Error(`Fish Speech TTS failed: ${res.status} ${res.statusText}`);
-	}
-
-	const arrayBuffer = await res.arrayBuffer();
-	const audio = Buffer.from(arrayBuffer);
-	const durationMs = wavDurationMs(audio);
-
-	log.info(`TTS generated: ${text.length} chars → ${audio.length} bytes, ${Math.round(durationMs)}ms`);
-
-	return { audio, durationMs };
 }

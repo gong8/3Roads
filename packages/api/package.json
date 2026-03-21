@@ -12,6 +12,7 @@
     "@3roads/shared": "workspace:*",
     "@hono/node-server": "^1.19.11",
     "hono": "^4.7.2",
+    "sherpa-onnx-node": "^1.12.31",
     "ws": "^8.19.0"
   },
   "devDependencies": {

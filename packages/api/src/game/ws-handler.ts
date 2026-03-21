@@ -10,6 +10,7 @@ import {
 	nextQuestion,
 	sendTo,
 	skipQuestion,
+	pregenerateTTS,
 	startGame,
 } from "./engine.js";
 import {
@@ -125,6 +126,11 @@ async function handleCreateRoom(
 	wsContext.set(ws, { roomCode: room.code, playerId });
 	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId });
 	broadcastPlayerList(room);
+
+	// Fire-and-forget: start TTS pregeneration in background
+	if (room.settings.ttsEnabled) {
+		pregenerateTTS(room).catch(() => {});
+	}
 }
 
 async function handleJoinRoom(

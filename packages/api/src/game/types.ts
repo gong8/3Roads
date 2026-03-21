@@ -92,6 +92,7 @@ export interface GameRoom {
 	settings: GameSettings;
 	lastActivity: number;
 	answerTimer: ReturnType<typeof setTimeout> | null;
+	ttsCache: Map<string, { audioId: string; durationMs: number }>;
 }
 
 // -- Client -> Server messages --
@@ -309,6 +310,13 @@ export interface PlayerReconnectedEvt {
 	playerName: string;
 }
 
+export interface TtsProgressEvt {
+	type: "tts_progress";
+	current: number;
+	total: number;
+	etaMs?: number;
+}
+
 export type ServerMessage =
 	| RoomCreatedEvt
 	| RoomJoinedEvt
@@ -330,4 +338,5 @@ export type ServerMessage =
 	| AwaitBonusAnswerEvt
 	| PlayerKickedEvt
 	| PlayerDisconnectedEvt
-	| PlayerReconnectedEvt;
+	| PlayerReconnectedEvt
+	| TtsProgressEvt;

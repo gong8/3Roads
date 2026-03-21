@@ -72,6 +72,45 @@ function shuffle<T>(arr: T[]): T[] {
 
 // -- Game flow --
 
+export async function pregenerateTTS(room: GameRoom): Promise<void> {
+	if (!room.settings.ttsEnabled) return;
+
+	try {
+		log.info(`Room ${room.code} — pregenerating TTS audio...`);
+		const texts: { key: string; text: string }[] = [];
+		for (const t of room.tossups) {
+			texts.push({ key: `tossup:${t.id}`, text: t.question });
+		}
+		for (const b of room.bonuses) {
+			texts.push({ key: `bonus-leadin:${b.id}`, text: b.leadin });
+			for (const p of b.parts) {
+				texts.push({ key: `bonus-part:${b.id}:${p.partNum}`, text: p.text });
+			}
+		}
+
+		broadcast(room, { type: "tts_progress", current: 0, total: texts.length });
+		const startTime = Date.now();
+		for (let i = 0; i < texts.length; i++) {
+			// Yield event loop so WS broadcasts flush to clients
+			await new Promise((r) => setImmediate(r));
+			const { key, text } = texts[i];
+			const { audio, durationMs } = await generateTTS(text);
+			const audioId = storeAudio(audio);
+			room.ttsCache.set(key, { audioId, durationMs });
+			const elapsed = Date.now() - startTime;
+			const avgMs = elapsed / (i + 1);
+			const etaMs = Math.round(avgMs * (texts.length - i - 1));
+			broadcast(room, { type: "tts_progress", current: i + 1, total: texts.length, etaMs });
+		}
+		log.info(`Room ${room.code} — TTS pregeneration complete (${texts.length} clips)`);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		log.warn(`Room ${room.code} — TTS pregeneration failed, disabling: ${msg}`);
+		broadcast(room, { type: "error", message: `TTS unavailable: ${msg}` });
+		room.settings.ttsEnabled = false;
+	}
+}
+
 export function startGame(room: GameRoom): void {
 	room.tossups = shuffle(room.tossups);
 	room.bonuses = shuffle(room.bonuses);
@@ -117,20 +156,14 @@ export async function startTossup(room: GameRoom): Promise<void> {
 	room.phase = "reading_tossup";
 	room.lastActivity = Date.now();
 
-	// Generate TTS if enabled
+	// Look up pregenerated TTS audio
 	let audioUrl: string | undefined;
 	let msPerWord = room.settings.msPerWord;
 	if (room.settings.ttsEnabled) {
-		try {
-			const { audio, durationMs } = await generateTTS(tossup.question);
-			const audioId = storeAudio(audio);
-			audioUrl = `/audio/${audioId}`;
-			msPerWord = durationMs / words.length;
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			log.warn(`TTS failed for tossup, falling back to text-only: ${msg}`);
-			broadcast(room, { type: "error", message: `TTS unavailable: ${msg}` });
-			room.settings.ttsEnabled = false; // disable for rest of game to avoid repeated failures
+		const cached = room.ttsCache.get(`tossup:${tossup.id}`);
+		if (cached) {
+			audioUrl = `/audio/${cached.audioId}`;
+			msPerWord = cached.durationMs / words.length;
 		}
 	}
 
@@ -383,18 +416,12 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 	room.phase = "reading_bonus";
 	room.lastActivity = Date.now();
 
-	// Generate TTS for leadin if enabled
+	// Look up pregenerated TTS audio for leadin
 	let audioUrl: string | undefined;
 	if (room.settings.ttsEnabled) {
-		try {
-			const { audio } = await generateTTS(bonus.leadin);
-			const audioId = storeAudio(audio);
-			audioUrl = `/audio/${audioId}`;
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			log.warn(`TTS failed for bonus leadin: ${msg}`);
-			broadcast(room, { type: "error", message: `TTS unavailable: ${msg}` });
-			room.settings.ttsEnabled = false;
+		const cached = room.ttsCache.get(`bonus-leadin:${bonus.id}`);
+		if (cached) {
+			audioUrl = `/audio/${cached.audioId}`;
 		}
 	}
 
@@ -440,18 +467,14 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 	const part = br.parts[br.currentPart];
 	const partWords = part.text.split(/\s+/);
 
-	// Generate TTS for bonus part if enabled
+	// Look up pregenerated TTS audio for bonus part
 	let audioUrl: string | undefined;
 	if (room.settings.ttsEnabled) {
-		try {
-			const { audio } = await generateTTS(part.text);
-			const audioId = storeAudio(audio);
-			audioUrl = `/audio/${audioId}`;
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			log.warn(`TTS failed for bonus part: ${msg}`);
-			broadcast(room, { type: "error", message: `TTS unavailable: ${msg}` });
-			room.settings.ttsEnabled = false;
+		const bonus = room.bonuses[br.bonusIndex];
+		const partNum = bonus.parts[br.currentPart]?.partNum ?? br.currentPart + 1;
+		const cached = room.ttsCache.get(`bonus-part:${bonus.id}:${partNum}`);
+		if (cached) {
+			audioUrl = `/audio/${cached.audioId}`;
 		}
 	}
 

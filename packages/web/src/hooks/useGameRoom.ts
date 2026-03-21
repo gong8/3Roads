@@ -73,6 +73,7 @@ export interface GameState {
 	buzzedPlayer: { id: string; name: string } | null;
 	kicked: boolean;
 	neggedPlayerIds: Set<string>;
+	ttsProgress: { current: number; total: number; etaMs?: number } | null;
 }
 
 type Action =
@@ -99,6 +100,7 @@ type Action =
 	| { type: "player_kicked"; playerId: string; playerName: string }
 	| { type: "player_disconnected"; playerId: string; playerName: string }
 	| { type: "player_reconnected"; playerId: string; playerName: string }
+	| { type: "tts_progress"; current: number; total: number; etaMs?: number }
 	| { type: "clear_error" }
 	| { type: "clear_result" };
 
@@ -119,6 +121,7 @@ const initialState: GameState = {
 	buzzedPlayer: null,
 	kicked: false,
 	neggedPlayerIds: new Set(),
+	ttsProgress: null,
 };
 
 function reducer(state: GameState, action: Action): GameState {
@@ -141,9 +144,12 @@ function reducer(state: GameState, action: Action): GameState {
 				...(action.phase === "reading_tossup" ? { awaitAnswer: null, lastResult: null, deadAnswer: null, buzzedPlayer: null, awaitBonusAnswer: null } : {}),
 				...(action.phase === "between_questions" ? { awaitAnswer: null, awaitBonusAnswer: null, buzzedPlayer: null } : {}),
 			};
+		case "tts_progress":
+			return { ...state, ttsProgress: action.current >= action.total ? null : { current: action.current, total: action.total, etaMs: action.etaMs } };
 		case "tossup_start":
 			return {
 				...state,
+				ttsProgress: null,
 				tossup: {
 					questionNumber: action.questionNumber,
 					totalQuestions: action.totalQuestions,

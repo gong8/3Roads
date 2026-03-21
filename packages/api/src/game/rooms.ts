@@ -110,6 +110,7 @@ export async function createRoom(
 		},
 		lastActivity: Date.now(),
 		answerTimer: null,
+		ttsCache: new Map(),
 	};
 
 	activeRooms.set(code, room);

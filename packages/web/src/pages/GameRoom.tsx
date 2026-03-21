@@ -162,6 +162,24 @@ export function GameRoom() {
 				</div>
 			)}
 
+			{/* TTS pregeneration progress */}
+			{state.ttsProgress && (
+				<div className="mb-4">
+					<div className="text-xs text-gray-500 mb-1">
+						generating audio... {state.ttsProgress.current}/{state.ttsProgress.total}
+						{state.ttsProgress.etaMs != null && state.ttsProgress.etaMs > 0 && (
+							<> — {Math.ceil(state.ttsProgress.etaMs / 60000)}m {Math.ceil((state.ttsProgress.etaMs % 60000) / 1000)}s left</>
+						)}
+					</div>
+					<div className="w-full max-w-xs h-1 bg-gray-200">
+						<div
+							className="h-1 bg-black transition-all"
+							style={{ width: `${(state.ttsProgress.current / state.ttsProgress.total) * 100}%` }}
+						/>
+					</div>
+				</div>
+			)}
+
 			{/* Reading Tossup / Awaiting Answer / Judging */}
 			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || state.phase === "judging") && state.tossup && (
 				<div>
