@@ -10,6 +10,7 @@ import { QuestionHistory } from "../components/game/QuestionHistory";
 import { Scoreboard } from "../components/game/Scoreboard";
 import { TeamAssignment } from "../components/game/TeamAssignment";
 import { TossupReader } from "../components/game/TossupReader";
+import { useState } from "react";
 
 interface CreateState {
 	action: "create";
@@ -144,6 +145,8 @@ export function GameRoom() {
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [handleKeyDown]);
 
+	const [showScoreboard, setShowScoreboard] = useState(false);
+
 	const displayCode = state.roomCode || roomCode;
 
 	if (!state.connected && !state.playerId) {
@@ -151,22 +154,58 @@ export function GameRoom() {
 	}
 
 	return (
-		<div>
-			<div className="flex justify-between items-baseline mb-4">
-				<div className="text-xs text-gray-500">room: <span className="text-black font-bold">{displayCode}</span></div>
-				<div className="text-xs text-gray-500">{state.phase}</div>
+		<>
+			{/* Hideable Left Scoreboard */}
+			{!showScoreboard && state.phase !== "lobby" && (
+				<button 
+					type="button" 
+					onClick={() => setShowScoreboard(true)}
+					className="fixed left-0 top-[15%] bg-white border border-l-0 border-black px-2 py-3 text-xs z-40 shadow-sm hover:bg-gray-50 rounded-r cursor-pointer opacity-80 hover:opacity-100"
+					style={{ writingMode: 'vertical-rl' }}
+				>
+					scoreboard
+				</button>
+			)}
+
+			<div className={`fixed left-0 top-0 bottom-0 w-72 bg-white border-r border-black p-4 z-40 shadow-2xl overflow-y-auto flex flex-col transition-transform ${showScoreboard ? "translate-x-0" : "-translate-x-full"}`}>
+				<div className="flex justify-between items-center mb-6">
+					<div className="font-bold">scoreboard</div>
+					{state.phase !== "lobby" && (
+						<button type="button" onClick={() => setShowScoreboard(false)} className="text-xl leading-none hover:text-gray-500">&times;</button>
+					)}
+				</div>
+				<Scoreboard 
+					players={state.phase === "game_over" && state.gameOverPlayers 
+						? state.gameOverPlayers.map((p) => ({ ...p, isModerator: false }))
+						: state.players} 
+					currentPlayerId={state.playerId} 
+					teamMode={isTeamMode || (state.phase === "game_over" && (state.gameOverPlayers?.some(p => p.team != null) ?? false))} 
+				/>
+				{state.phase === "lobby" && isTeamMode && (
+					<div className="mt-4">
+						<TeamAssignment players={state.players} isModerator={isModerator} onSetTeam={setTeam} />
+					</div>
+				)}
 			</div>
 
-			{/* Lobby */}
-			{state.phase === "lobby" && (
-				<div>
-					<div className="mb-3 text-xs text-gray-500">
-						share code: <span className="text-black font-bold text-lg">{displayCode}</span>
-					</div>
-					<Scoreboard players={state.players} currentPlayerId={state.playerId} teamMode={isTeamMode} />
-					{isTeamMode && (
-						<TeamAssignment players={state.players} isModerator={isModerator} onSetTeam={setTeam} />
+			{/* Main Content Column */}
+			<div className="max-w-3xl mx-auto w-full pt-8 px-4">
+				<div className="flex justify-between items-baseline mb-4">
+					{state.phase === "lobby" ? (
+						<div className="text-xs text-gray-500">room: <span className="text-black font-bold">{displayCode}</span></div>
+					) : (
+						<div />
 					)}
+					<div className="text-xs text-gray-500">{state.phase}</div>
+				</div>
+
+				{/* Lobby */}
+				{state.phase === "lobby" && (
+					<div>
+						<div className="mb-3 text-xs text-gray-500">
+							share code: <span className="text-black font-bold text-lg">{displayCode}</span>
+						</div>
+
 					{isModerator && state.players.length >= 1 && (
 						<button type="button" onClick={startGame} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white mt-4">
 							start game
@@ -234,9 +273,7 @@ export function GameRoom() {
 						</div>
 					)}
 
-					<div className="mt-3">
-						<Scoreboard players={state.players} currentPlayerId={state.playerId} compact teamMode={isTeamMode} />
-					</div>
+
 				</div>
 			)}
 
@@ -266,9 +303,7 @@ export function GameRoom() {
 						<div className="text-xs text-gray-500 mt-2">waiting for answer...</div>
 					)}
 
-					<div className="mt-3">
-						<Scoreboard players={state.players} currentPlayerId={state.playerId} compact teamMode={isTeamMode} />
-					</div>
+
 				</div>
 			)}
 
@@ -290,7 +325,7 @@ export function GameRoom() {
 					{state.bonus?.totalPoints != null && (
 						<div className="mb-2 text-xs text-gray-500">bonus total: {state.bonus.totalPoints}/30</div>
 					)}
-					<Scoreboard players={state.players} currentPlayerId={state.playerId} teamMode={isTeamMode} />
+
 					{isModerator && (
 						<button type="button" onClick={nextQuestion} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
 							next question
@@ -303,13 +338,6 @@ export function GameRoom() {
 			{state.phase === "game_over" && (
 				<div>
 					<div className="mb-3 font-bold">game over</div>
-					{state.gameOverPlayers && (
-						<Scoreboard
-							players={state.gameOverPlayers.map((p) => ({ ...p, isModerator: false }))}
-							currentPlayerId={state.playerId}
-							teamMode={state.gameOverPlayers.some((p) => p.team != null)}
-						/>
-					)}
 					<button type="button" onClick={() => navigate("/play")} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
 						back to lobby
 					</button>
@@ -336,6 +364,7 @@ export function GameRoom() {
 			{state.phase !== "lobby" && (
 				<QuestionHistory history={state.history} />
 			)}
-		</div>
+			</div>
+		</>
 	);
 }

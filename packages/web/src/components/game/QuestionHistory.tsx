@@ -60,7 +60,7 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 			</button>
 
 			{expanded && (
-				<div className="mt-2 space-y-2 max-h-60 overflow-y-auto">
+				<div className="mt-2 space-y-2">
 					{[...history].reverse().map((entry, i) => (
 						<div key={history.length - 1 - i} className="text-xs border border-gray-100 p-2">
 							<div className="flex justify-between items-baseline mb-1 border-b border-gray-100 pb-1">
