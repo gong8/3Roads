@@ -115,6 +115,7 @@ export interface CreateRoomMsg {
 	playerName: string;
 	mode: GameMode;
 	ttsEnabled?: boolean;
+	includeBonuses?: boolean;
 	strictness?: number;
 	msPerWord?: number;
 }

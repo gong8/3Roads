@@ -161,7 +161,7 @@ function reducer(state: GameState, action: Action): GameState {
 				...state,
 				phase: action.phase,
 				// Clear transient state on phase transitions
-				...(action.phase === "reading_tossup" ? { awaitAnswer: null, lastResult: null, deadAnswer: null, buzzedPlayer: null, awaitBonusAnswer: null } : {}),
+				...(action.phase === "reading_tossup" ? { awaitAnswer: null, deadAnswer: null, buzzedPlayer: null, awaitBonusAnswer: null } : {}),
 				...(action.phase === "between_questions" ? { awaitAnswer: null, awaitBonusAnswer: null, buzzedPlayer: null } : {}),
 			};
 		case "tts_progress":
@@ -383,14 +383,14 @@ export function useGameRoom() {
 	}, []);
 
 	const createRoom = useCallback(
-		async (questionSetId: string, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, leniency?: number, msPerWord?: number }) => {
+		async (questionSetId: string, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, includeBonuses?: boolean, leniency?: number, msPerWord?: number }) => {
 			connect();
 			try {
 				await socketRef.current?.ready;
 			} catch {
 				return; // disconnect handler already dispatched
 			}
-			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled: options?.ttsEnabled, strictness: options?.leniency, msPerWord: options?.msPerWord });
+			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled: options?.ttsEnabled, includeBonuses: options?.includeBonuses, strictness: options?.leniency, msPerWord: options?.msPerWord });
 		},
 		[connect, send],
 	);

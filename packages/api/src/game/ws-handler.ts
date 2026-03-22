@@ -85,7 +85,7 @@ function sendRaw(ws: WebSocket, msg: ServerMessage): void {
 async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 	switch (msg.type) {
 		case "create_room":
-			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled, msg.strictness, msg.msPerWord);
+			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled, msg.includeBonuses, msg.strictness, msg.msPerWord);
 			break;
 		case "join_room":
 			await handleJoinRoom(ws, msg.roomCode, msg.playerName);
@@ -143,10 +143,11 @@ async function handleCreateRoom(
 	playerName: string,
 	mode: "ffa" | "teams",
 	ttsEnabled?: boolean,
+	includeBonuses?: boolean,
 	strictness?: number,
 	msPerWord?: number,
 ): Promise<void> {
-	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, strictness, msPerWord);
+	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, includeBonuses, strictness, msPerWord);
 	wsContext.set(ws, { roomCode: room.code, playerId });
 	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId });
 	broadcastPlayerList(room);
@@ -277,7 +278,7 @@ async function handleSubmitBonusAnswer(ws: WebSocket, answer: string): Promise<v
 }
 
 function handleNextQuestion(ws: WebSocket): void {
-	const ctx = requireModerator(ws);
+	const ctx = getContext(ws);
 	if (!ctx) return;
 	nextQuestion(ctx.room);
 }
@@ -325,13 +326,13 @@ function handleUpdateSettings(ws: WebSocket, msg: { strictness?: number; msPerWo
 }
 
 function handlePause(ws: WebSocket): void {
-	const ctx = requireModerator(ws);
+	const ctx = getContext(ws);
 	if (!ctx) return;
 	pauseGame(ctx.room);
 }
 
 function handleResume(ws: WebSocket): void {
-	const ctx = requireModerator(ws);
+	const ctx = getContext(ws);
 	if (!ctx) return;
 	resumeGame(ctx.room);
 }

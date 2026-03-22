@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSets } from "../hooks/useSets";
 
@@ -56,18 +56,29 @@ export function Play() {
 	const [selectedSetId, setSelectedSetId] = useState("");
 	const [mode, setMode] = useState<"ffa" | "teams">("ffa");
 	const [ttsEnabled, setTtsEnabled] = useState(false);
+	const [includeBonuses, setIncludeBonuses] = useState(true);
 	const [leniency, setLeniency] = useState(7);
 	const [wordsPerSec, setWordsPerSec] = useState(4.5);
 	const [error, setError] = useState<string | null>(null);
 
 	const { data: sets } = useSets();
 
+	// Pick a random set once the list loads
+	useEffect(() => {
+		if (sets && sets.length > 0 && !selectedSetId) {
+			setSelectedSetId(sets[Math.floor(Math.random() * sets.length)].id);
+		}
+	}, [sets, selectedSetId]);
+
+	const selectedSet = sets?.find((s) => s.id === selectedSetId);
+	const setHasBonuses = (selectedSet?.bonusCount ?? 0) > 0;
+
 	const handleCreate = () => {
 		if (!name.trim()) { setError("enter a name"); return; }
 		if (!selectedSetId) { setError("select a question set"); return; }
 		const msPerWord = Math.round(1000 / wordsPerSec);
 		navigate("/play/new", {
-			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled, leniency, readingSpeed: msPerWord },
+			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled, includeBonuses: includeBonuses && setHasBonuses, leniency, readingSpeed: msPerWord },
 		});
 	};
 
@@ -110,7 +121,7 @@ export function Play() {
 							onChange={(e) => setSelectedSetId(e.target.value)}
 							className="border border-black px-2 py-1 text-sm w-full max-w-xs"
 						>
-							<option value="">select...</option>
+							<option value="">random</option>
 							{sets?.map((s) => (
 								<option key={s.id} value={s.id}>
 									{s.name} ({s.tossupCount}T / {s.bonusCount}B)
@@ -128,6 +139,18 @@ export function Play() {
 							<option value="ffa">free for all</option>
 							<option value="teams">teams (2)</option>
 						</select>
+					</div>
+					<div className="mb-3">
+						<label className="text-xs text-gray-500 flex items-center gap-2">
+							<input
+								type="checkbox"
+								checked={includeBonuses && setHasBonuses}
+								onChange={(e) => setIncludeBonuses(e.target.checked)}
+								disabled={!setHasBonuses}
+							/>
+							read bonuses
+							{selectedSetId && !setHasBonuses && <span className="text-gray-400">(this set has no bonuses)</span>}
+						</label>
 					</div>
 					<div className="mb-3">
 						<label className="text-xs text-gray-500 flex items-center gap-2">

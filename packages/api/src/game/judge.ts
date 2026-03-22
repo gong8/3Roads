@@ -100,6 +100,8 @@ function localJudge(
 		"first", "second", "third", "st", "nd", "rd", "th"
 	]);
 
+	const ADJECTIVE_SUFFIXES = ["an", "ian", "ean", "ish", "ese", "ic", "ine", "i", "n"];
+
 	for (const form of acceptableForms) {
 		const normalizedForm = normalize(form);
 		if (!normalizedForm) continue;
@@ -107,10 +109,35 @@ function localJudge(
 		// 1. Exact match
 		if (normalizedSubmitted === normalizedForm) return "correct";
 
-		// 2. Keyword containment (Prefix / Suffix)
+		// 1b. Order-agnostic match for conjunctive answers ("spain and france" == "france and spain")
+		const splitPattern = /\s+and\s+|\s*[,&]\s*/;
+		if (splitPattern.test(normalizedForm) || splitPattern.test(normalizedSubmitted)) {
+			const sortParts = (s: string) => s.split(splitPattern).map((p) => p.trim()).filter(Boolean).sort().join(" ");
+			if (sortParts(normalizedSubmitted) === sortParts(normalizedForm)) return "correct";
+		}
+
+		// 2. Adjective/demonym form: submitted is a common adjectival derivation of the canonical answer
+		//    e.g. "italian" for "italy", "french" for "france", "american" for "america"
+		if (normalizedForm.length >= 3) {
+			for (const suffix of ADJECTIVE_SUFFIXES) {
+				// Try stripping suffix from submitted to see if it matches (allowing 1-char stem mutation)
+				if (normalizedSubmitted.endsWith(suffix) && normalizedSubmitted.length > suffix.length) {
+					const stem = normalizedSubmitted.slice(0, -suffix.length);
+					// Exact stem match or 1-char difference at the end (e.g. italy→italian: y→i)
+					if (normalizedForm === stem ||
+						(normalizedForm.length >= stem.length &&
+							normalizedForm.slice(0, stem.length - 1) === stem.slice(0, -1) &&
+							stem.length >= 3)) {
+						return "correct";
+					}
+				}
+			}
+		}
+
+		// 3. Keyword containment (Prefix / Suffix)
 		//    "bach" matches "johann sebastian bach", "rhine" matches "rhine river"
 		const formWords = normalizedForm.split(" ");
-		
+
 		if (formWords.length > 1 && !GENERIC_WORDS.has(normalizedSubmitted)) {
 			// Suffix matches
 			for (let n = 1; n < formWords.length; n++) {
@@ -174,7 +201,7 @@ export async function judgeAnswer(
 		`The canonical answer is: ${canonicalAnswer}`,
 		`The player submitted: ${submittedAnswer}`,
 		`The question was: ${questionText.slice(0, 500)}`,
-		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, or partial but clearly correct answers.`,
+		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, and adjective/demonym forms (e.g. "Italian" is correct for "Italy", "French" for "France", "American" for "United States").`,
 	].join("\n");
 
 	try {

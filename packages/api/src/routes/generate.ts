@@ -169,6 +169,16 @@ Each bonus has:
 					log.error(`POST /generate/stream — error during SSE delivery for set ${set.id}`, err);
 				} finally {
 					handle.unsubscribe();
+					// Clean up if the set ended up with no questions
+					const db = getDb();
+					const counts = await db.questionSet.findUnique({
+						where: { id: set.id },
+						include: { _count: { select: { tossups: true, bonuses: true } } },
+					}).catch(() => null);
+					if (counts && counts._count.tossups === 0 && counts._count.bonuses === 0) {
+						log.warn(`POST /generate/stream — no questions generated for set ${set.id}, deleting`);
+						await db.questionSet.delete({ where: { id: set.id } }).catch(() => {});
+					}
 				}
 			} catch (err) {
 				log.error(`POST /generate/stream — error inside SSE handler for set ${set.id}`, err);

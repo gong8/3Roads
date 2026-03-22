@@ -15,8 +15,9 @@ const DIFFICULTIES = [
 
 export function Generate() {
   const [theme, setTheme] = useState("");
-  const [tossupCount, setTossupCount] = useState(5);
-  const [bonusCount, setBonusCount] = useState(5);
+  const [tossupCountStr, setTossupCountStr] = useState("5");
+  const tossupCount = Math.min(20, Math.max(1, parseInt(tossupCountStr, 10) || 1));
+  const [includeBonuses, setIncludeBonuses] = useState(true);
   const [difficulty, setDifficulty] = useState("Regular High School");
   const [model, setModel] = useState("haiku");
   const {
@@ -29,7 +30,7 @@ export function Generate() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!theme.trim()) return;
-    generate(theme.trim(), tossupCount, bonusCount, difficulty, model);
+    generate(theme.trim(), tossupCount, includeBonuses ? tossupCount : 0, difficulty, model);
   };
 
   const totalTarget = targetTossups + targetBonuses;
@@ -62,6 +63,7 @@ export function Generate() {
             onChange={(e) => setTheme(e.target.value)}
             className="border border-black px-2 py-1 w-full font-mono"
             placeholder="e.g. American Civil War, Organic Chemistry"
+            maxLength={80}
             disabled={isGenerating}
           />
         </div>
@@ -90,31 +92,29 @@ export function Generate() {
             <option value="sonnet">Claude 3.5 Sonnet (Premium Quality)</option>
           </select>
         </div>
-        <div className="flex gap-4 mb-3">
-          <div>
-            <label className="block mb-1">tossups</label>
+        <div className="mb-3">
+          <label className="block mb-1">tossups</label>
+          <input
+            type="number"
+            value={tossupCountStr}
+            onChange={(e) => setTossupCountStr(e.target.value)}
+            onBlur={() => setTossupCountStr(String(tossupCount))}
+            min={1}
+            max={20}
+            className="border border-black px-2 py-1 w-20 font-mono"
+            disabled={isGenerating}
+          />
+        </div>
+        <div className="mb-3">
+          <label className="text-sm flex items-center gap-2">
             <input
-              type="number"
-              value={tossupCount}
-              onChange={(e) => setTossupCount(Number(e.target.value))}
-              min={0}
-              max={20}
-              className="border border-black px-2 py-1 w-20 font-mono"
+              type="checkbox"
+              checked={includeBonuses}
+              onChange={(e) => setIncludeBonuses(e.target.checked)}
               disabled={isGenerating}
             />
-          </div>
-          <div>
-            <label className="block mb-1">bonuses</label>
-            <input
-              type="number"
-              value={bonusCount}
-              onChange={(e) => setBonusCount(Number(e.target.value))}
-              min={0}
-              max={20}
-              className="border border-black px-2 py-1 w-20 font-mono"
-              disabled={isGenerating}
-            />
-          </div>
+            include bonuses ({tossupCount}, matching tossup count)
+          </label>
         </div>
         <button
           type="submit"

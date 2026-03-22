@@ -813,11 +813,6 @@ function advanceToNextQuestion(room: GameRoom): void {
 	room.tossupReading = null;
 	room.bonusReading = null;
 
-	if (room.currentQuestionIndex >= room.tossups.length) {
-		endGame(room);
-		return;
-	}
-
 	room.phase = "between_questions";
 	room.lastActivity = Date.now();
 	broadcast(room, { type: "phase_change", phase: "between_questions" });
@@ -990,5 +985,9 @@ export function endGame(room: GameRoom): void {
 
 export function nextQuestion(room: GameRoom): void {
 	if (room.phase !== "between_questions") return;
+	if (room.currentQuestionIndex >= room.tossups.length) {
+		endGame(room);
+		return;
+	}
 	startTossup(room);
 }

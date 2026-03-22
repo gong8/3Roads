@@ -34,6 +34,7 @@ export async function createRoom(
 	mode: GameMode,
 	ws: WebSocket,
 	ttsEnabled = false,
+	includeBonuses?: boolean,
 	strictness?: number,
 	msPerWord?: number,
 ): Promise<{ room: GameRoom; playerId: string }> {
@@ -62,7 +63,7 @@ export async function createRoom(
 		difficulty: t.difficulty,
 	}));
 
-	const bonuses: BonusData[] = set.bonuses.map((b) => ({
+	const bonuses: BonusData[] = (includeBonuses === false ? [] : set.bonuses).map((b) => ({
 		id: b.id,
 		leadin: b.leadin,
 		category: b.category,

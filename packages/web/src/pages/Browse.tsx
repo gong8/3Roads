@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useSets, useUpdateSet } from "../hooks/useSets";
+import { useSets, useUpdateSet, useDeleteSet } from "../hooks/useSets";
 import { useFolders, useCreateFolder, useUpdateFolder, useDeleteFolder } from "../hooks/useFolders";
 import type { Folder } from "../hooks/useFolders";
 
@@ -13,6 +13,7 @@ export function Browse() {
   const updateFolder = useUpdateFolder();
   const deleteFolder = useDeleteFolder();
   const updateSet = useUpdateSet();
+  const deleteSet = useDeleteSet();
 
   const [filter, setFilter] = useState<Filter>("all");
   const [newFolderName, setNewFolderName] = useState("");
@@ -123,22 +124,23 @@ export function Browse() {
         <table className="w-full text-left border-collapse">
           <thead>
             <tr className="border-b border-black">
-              <th className="py-1">name</th>
+              <th className="py-1 w-1/3">name</th>
               <th className="py-1">difficulty</th>
-              <th className="py-1">tossups</th>
-              <th className="py-1">bonuses</th>
-              <th className="py-1">folder</th>
+              <th className="py-1 text-center px-4">tossups</th>
+              <th className="py-1 text-center px-4">bonuses</th>
+              <th className="py-1 px-4">folder</th>
               <th className="py-1">created</th>
+              <th className="py-1 w-16 text-center"></th>
             </tr>
           </thead>
           <tbody>
             {filteredSets.map((s) => (
               <tr key={s.id} className="border-b border-gray-300">
-                <td className="py-1"><Link to={`/sets/${s.id}`} className="underline">{s.name}</Link></td>
+                <td className="py-1 break-words"><Link to={`/sets/${s.id}`} className="underline">{s.name}</Link></td>
                 <td className="py-1">{s.difficulty}</td>
-                <td className="py-1">{s.tossupCount ?? 0}</td>
-                <td className="py-1">{s.bonusCount ?? 0}</td>
-                <td className="py-1">
+                <td className="py-1 text-center px-4">{s.tossupCount ?? 0}</td>
+                <td className="py-1 text-center px-4">{(s.bonusCount ?? 0) > 0 ? "✓" : "✗"}</td>
+                <td className="py-1 px-4">
                   <select
                     className="border border-gray-300 text-sm"
                     value={s.folderId ?? ""}
@@ -151,6 +153,17 @@ export function Browse() {
                   </select>
                 </td>
                 <td className="py-1">{new Date(s.createdAt).toLocaleDateString()}</td>
+                <td className="py-1 text-center">
+                  <button
+                    onClick={() => {
+                      if (!confirm(`Delete "${s.name}"? This cannot be undone.`)) return;
+                      deleteSet.mutate(s.id);
+                    }}
+                    className="text-gray-400 hover:text-black text-xs cursor-pointer"
+                  >
+                    delete
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>

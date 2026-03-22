@@ -18,6 +18,7 @@ interface CreateState {
 	playerName: string;
 	mode: "ffa" | "teams";
 	ttsEnabled?: boolean;
+	includeBonuses?: boolean;
 	leniency?: number;
 	readingSpeed?: number;
 }
@@ -59,7 +60,7 @@ export function GameRoom() {
 
 	useGameAudio(state, sendAudioReady);
 
-	// Initialize connection on mount
+	// Initialize connection on mount (runs once; URL change from /new to /ABCD must not re-run)
 	useEffect(() => {
 		if (initRef.current) return;
 		if (!locationState) {
@@ -69,20 +70,25 @@ export function GameRoom() {
 		initRef.current = true;
 
 		if (locationState.action === "create") {
-			createRoom(locationState.questionSetId, locationState.playerName, locationState.mode, { 
+			createRoom(locationState.questionSetId, locationState.playerName, locationState.mode, {
 				ttsEnabled: locationState.ttsEnabled,
+				includeBonuses: locationState.includeBonuses,
 				leniency: locationState.leniency,
 				msPerWord: locationState.readingSpeed
 			});
 		} else if (locationState.action === "join" && roomCode) {
 			joinRoom(roomCode, locationState.playerName);
 		}
+	// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
 
+	// Disconnect on unmount only
+	useEffect(() => {
 		return () => {
 			initRef.current = false;
 			disconnect();
 		};
-	}, [locationState, roomCode, createRoom, joinRoom, navigate, disconnect, updateSettings]);
+	}, [disconnect]);
 
 	// When room is created, update URL to actual room code
 	useEffect(() => {
@@ -132,7 +138,7 @@ export function GameRoom() {
 				e.preventDefault();
 				buzz();
 			}
-			if (e.key === "n" && isModerator && state.phase === "between_questions") {
+			if (e.key === "n" && state.phase === "between_questions") {
 				e.preventDefault();
 				nextQuestion();
 			}
@@ -140,7 +146,7 @@ export function GameRoom() {
 				e.preventDefault();
 				startGame();
 			}
-			if (e.key === "p" && isModerator) {
+			if (e.key === "p") {
 				e.preventDefault();
 				if (state.phase === "paused") resume();
 				else pause();
@@ -276,7 +282,7 @@ export function GameRoom() {
 						<div className="mt-2 text-xs text-gray-500">judging...</div>
 					)}
 
-					{state.lastResult && (
+					{state.lastResult && state.phase !== "between_questions" && (
 						<div className={`mt-2 text-xs ${state.lastResult.correct ? "text-green-700" : "text-red-700"}`}>
 							{state.lastResult.playerName}: "{state.lastResult.answer}" — {state.lastResult.correct ? `correct (+${state.lastResult.points})` : `incorrect (${state.lastResult.points})`}
 						</div>
@@ -328,24 +334,43 @@ export function GameRoom() {
 			)}
 
 			{/* Between questions */}
-			{state.phase === "between_questions" && (
-				<div>
-					{state.lastResult && (
-						<div className={`mb-2 text-xs ${state.lastResult.correct ? "text-green-700" : "text-red-700"}`}>
-							{state.lastResult.playerName}: "{state.lastResult.answer}" — {state.lastResult.correct ? `correct (+${state.lastResult.points})` : `incorrect (${state.lastResult.points})`}
-						</div>
-					)}
-					{state.bonus?.totalPoints != null && (
-						<div className="mb-2 text-xs text-gray-500">bonus total: {state.bonus.totalPoints}/30</div>
-					)}
+			{state.phase === "between_questions" && (() => {
+				const isLastQuestion = state.tossup != null && state.tossup.questionNumber === state.tossup.totalQuestions;
+				const sortedPlayers = [...state.players].sort((a, b) => b.score - a.score);
+				const topScore = sortedPlayers[0]?.score ?? 0;
+				const winners = sortedPlayers.filter((p) => p.score === topScore);
+				return (
+					<div>
+						{state.lastResult && (
+							<div className={`mb-2 text-xs ${state.lastResult.correct ? "text-green-700" : "text-red-700"}`}>
+								{state.lastResult.playerName}: "{state.lastResult.answer}" — {state.lastResult.correct ? `correct (+${state.lastResult.points})` : `incorrect (${state.lastResult.points})`}
+							</div>
+						)}
+						{state.bonus?.totalPoints != null && (
+							<div className="mb-2 text-xs text-gray-500">bonus total: {state.bonus.totalPoints}/30</div>
+						)}
 
-					{isModerator && (
-						<button type="button" onClick={nextQuestion} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
-							next question
-						</button>
-					)}
-				</div>
-			)}
+						{isLastQuestion ? (
+							<div>
+								<div className="mt-2 mb-3 text-sm font-bold">
+									{winners.length === 1
+										? `winner: ${winners[0].name} (${topScore})`
+										: `tie: ${winners.map((w) => w.name).join(", ")} (${topScore})`}
+								</div>
+								{isModerator && (
+									<button type="button" onClick={endGame} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
+										end game
+									</button>
+								)}
+							</div>
+						) : (
+							<button type="button" onClick={nextQuestion} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
+								next question
+							</button>
+						)}
+					</div>
+				);
+			})()}
 
 			{/* Game over */}
 			{state.phase === "game_over" && (
@@ -361,9 +386,7 @@ export function GameRoom() {
 			{state.phase === "paused" && (
 				<div className="my-4 border border-black px-4 py-3 text-sm flex items-center justify-between">
 					<span className="font-bold">paused</span>
-					{isModerator && (
-						<button type="button" onClick={resume} className="text-xs underline hover:text-gray-500">resume (p)</button>
-					)}
+					<button type="button" onClick={resume} className="text-xs underline hover:text-gray-500">resume (p)</button>
 				</div>
 			)}
 

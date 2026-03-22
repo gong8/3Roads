@@ -8,6 +8,7 @@ const SYSTEM_PROMPT_SUFFIX = [
 	"IMPORTANT CONSTRAINTS:",
 	"- Use ONLY MCP tools prefixed with mcp__3roads__ to save questions. Never attempt to use filesystem, code editing, web browsing, or any non-MCP tools.",
 	"- Always include category, subcategory, and difficulty for each question.",
+	"- NEVER include the answer word, any variant of it, or anything that sounds like it ANYWHERE in the question text. Replace it with a placeholder like 'this country', 'this author', 'this element', 'this work', 'this region', etc. as appropriate. The answer must not be nameable from any word in the question itself.",
 	"- NEVER write clues that transparently give away the answer through etymology, word games, or trivial restatement.",
 	"- Every tossup must be strictly pyramidal: hardest clues first, power mark at 1/3-1/2 through, giveaway last.",
 ].join("\n");
@@ -141,7 +142,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		if (tossupCount > 0) {
 			const answerList = plan.tossup_answers.slice(0, tossupCount).join("\n- ");
-			const tossupPrompt = `Write ${tossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
+			const tossupPrompt = `Write ${tossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — refer to the subject only as 'this person', 'this country', 'this work', 'this element', etc. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
 
 			tasks.push(
 				runCliChat({
@@ -196,5 +197,15 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 			where: { id: setId },
 			data: { status: "error" },
 		});
+	}
+
+	// Clean up sets that ended up with no questions at all
+	const counts = await db.questionSet.findUnique({
+		where: { id: setId },
+		include: { _count: { select: { tossups: true, bonuses: true } } },
+	});
+	if (counts && counts._count.tossups === 0 && counts._count.bonuses === 0) {
+		log.warn(`[${setId}] No questions generated — deleting empty set`);
+		await db.questionSet.delete({ where: { id: setId } }).catch(() => {});
 	}
 }
