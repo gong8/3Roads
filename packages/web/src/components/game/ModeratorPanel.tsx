@@ -14,7 +14,7 @@ interface Props {
 export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpdateSettings, players, ttsEnabled }: Props) {
 	const kickable = players.filter((p) => !p.isModerator);
 	const [leniency, setLeniency] = useState(7);
-	const [readingSpeed, setReadingSpeed] = useState(300);
+	const [wordsPerSec, setWordsPerSec] = useState(4.5);
 	const [isOpen, setIsOpen] = useState(false);
 
 	return (
@@ -80,18 +80,18 @@ export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpd
 						{!ttsEnabled && (
 						<div>
 							<label className="text-xs text-gray-600 block mb-1">
-								reading speed: {(1000 / readingSpeed).toFixed(1)} words/s
+								reading speed: {wordsPerSec.toFixed(1)} words/s
 							</label>
 							<input
 								type="range"
-								min={100}
-								max={500}
-								step={50}
-								value={600 - readingSpeed}
+								min={1.0}
+								max={8.0}
+								step={0.1}
+								value={wordsPerSec}
 								onChange={(e) => {
-									const v = 600 - Number(e.target.value);
-									setReadingSpeed(v);
-									onUpdateSettings({ msPerWord: v });
+									const wps = Number(e.target.value);
+									setWordsPerSec(wps);
+									onUpdateSettings({ msPerWord: Math.round(1000 / wps) });
 								}}
 								className="w-full"
 							/>

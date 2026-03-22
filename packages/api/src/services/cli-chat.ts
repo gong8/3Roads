@@ -45,6 +45,12 @@ const BLOCKED_BUILTIN_TOOLS = [
 	"SendMessage",
 	"TaskStop",
 	"ToolSearch",
+	"mcp__3roads__search_questions",
+	"mcp__3roads__save_tossup",
+	"mcp__3roads__save_bonus",
+	"mcp__3roads__create_set",
+	"mcp__3roads__get_sets",
+	"mcp__3roads__get_set",
 ];
 
 function getCliModel(model: string): string {

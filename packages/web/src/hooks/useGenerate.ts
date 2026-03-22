@@ -51,6 +51,7 @@ export function useGenerate() {
     tossupCount: number,
     bonusCount: number,
     difficulty: string,
+    model: string,
   ) => {
     stopPolling();
 
@@ -71,6 +72,7 @@ export function useGenerate() {
         tossupCount,
         bonusCount,
         difficulty,
+        model,
       });
 
       setState((s) => ({ ...s, setId: res.setId }));

@@ -13,7 +13,7 @@ export function Play() {
 	const [mode, setMode] = useState<"ffa" | "teams">("ffa");
 	const [ttsEnabled, setTtsEnabled] = useState(false);
 	const [leniency, setLeniency] = useState(7);
-	const [readingSpeed, setReadingSpeed] = useState(300);
+	const [wordsPerSec, setWordsPerSec] = useState(4.5);
 	const [error, setError] = useState<string | null>(null);
 
 	const { data: sets } = useSets();
@@ -21,8 +21,9 @@ export function Play() {
 	const handleCreate = () => {
 		if (!name.trim()) { setError("enter a name"); return; }
 		if (!selectedSetId) { setError("select a question set"); return; }
+		const msPerWord = Math.round(1000 / wordsPerSec);
 		navigate("/play/new", {
-			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled, leniency, readingSpeed },
+			state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled, leniency, readingSpeed: msPerWord },
 		});
 	};
 
@@ -110,15 +111,15 @@ export function Play() {
 					</div>
 					<div className="mb-3">
 						<label className="text-xs text-gray-500 block mb-1">
-							reading speed: {(1000 / readingSpeed).toFixed(1)} words/s
+							reading speed: {wordsPerSec.toFixed(1)} words/s
 						</label>
 						<input
 							type="range"
-							min={100}
-							max={500}
-							step={50}
-							value={600 - readingSpeed}
-							onChange={(e) => setReadingSpeed(600 - Number(e.target.value))}
+							min={1.0}
+							max={8.0}
+							step={0.1}
+							value={wordsPerSec}
+							onChange={(e) => setWordsPerSec(Number(e.target.value))}
 							className="w-48"
 						/>
 						<div className="text-xs text-gray-400 flex justify-between w-48">

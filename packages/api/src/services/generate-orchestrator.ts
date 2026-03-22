@@ -86,8 +86,9 @@ export async function runGeneration(params: {
 	difficulty: string;
 	tossupCount: number;
 	bonusCount: number;
+	model?: string;
 }): Promise<void> {
-	const { setId, theme, difficulty, tossupCount, bonusCount } = params;
+	const { setId, theme, difficulty, tossupCount, bonusCount, model } = params;
 	const db = getDb();
 
 	try {
@@ -110,6 +111,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		const planResult = await runCliChatSimple({
 			prompt: planPrompt,
 			systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
+			model: "haiku",
 		});
 
 		// Extract JSON from the result (handle possible markdown fences)
@@ -145,6 +147,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 				runCliChat({
 					prompt: tossupPrompt,
 					systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
+					model: model || "haiku",
 				}),
 			);
 		}
@@ -157,6 +160,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 				runCliChat({
 					prompt: bonusPrompt,
 					systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
+					model: model || "haiku",
 				}),
 			);
 		}

@@ -297,6 +297,7 @@ function reducer(state: GameState, action: Action): GameState {
 				bonus: {
 					...state.bonus,
 					currentPart: null,
+					words: [],
 					partResults: [
 						...state.bonus.partResults,
 						{
@@ -381,14 +382,14 @@ export function useGameRoom() {
 	}, []);
 
 	const createRoom = useCallback(
-		async (questionSetId: string, playerName: string, mode: "ffa" | "teams", ttsEnabled = false) => {
+		async (questionSetId: string, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, leniency?: number, msPerWord?: number }) => {
 			connect();
 			try {
 				await socketRef.current?.ready;
 			} catch {
 				return; // disconnect handler already dispatched
 			}
-			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled });
+			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled: options?.ttsEnabled, strictness: options?.leniency, msPerWord: options?.msPerWord });
 		},
 		[connect, send],
 	);

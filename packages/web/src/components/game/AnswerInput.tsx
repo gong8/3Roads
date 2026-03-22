@@ -13,16 +13,25 @@ export function AnswerInput({ onSubmit, timeMs, label = "your answer", disabled 
 	const inputRef = useRef<HTMLInputElement>(null);
 	const startRef = useRef(Date.now());
 
+	const valueRef = useRef(value);
+	valueRef.current = value;
+
 	useEffect(() => {
 		inputRef.current?.focus();
 		startRef.current = Date.now();
+		let autoSubmitted = false;
 		const interval = setInterval(() => {
 			const elapsed = Date.now() - startRef.current;
 			const left = Math.max(0, timeMs - elapsed);
 			setRemaining(left);
+			if (left === 0 && !autoSubmitted) {
+				autoSubmitted = true;
+				if (!disabled) onSubmit(valueRef.current);
+				clearInterval(interval);
+			}
 		}, 100);
 		return () => clearInterval(interval);
-	}, [timeMs]);
+	}, [timeMs, disabled, onSubmit]);
 
 	const handleSubmit = () => {
 		if (disabled) return;

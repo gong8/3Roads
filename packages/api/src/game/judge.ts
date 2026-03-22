@@ -13,15 +13,15 @@ const log = createLogger("api:game:judge");
 function parseAcceptableAnswers(canonical: string): string[] {
 	const answers: string[] = [];
 
-	// Extract main answer (everything before the first bracket)
-	const mainMatch = canonical.match(/^([^\[]+)/);
+	// Extract main answer (everything before the first bracket or parenthesis)
+	const mainMatch = canonical.match(/^([^\[\(]+)/);
 	if (mainMatch) {
 		const main = mainMatch[1].trim();
 		if (main) answers.push(main);
 	}
 
-	// Extract bracketed alternatives: [accept X], [or X]
-	const bracketPattern = /\[(?:accept|or)\s+([^\]]+)\]/gi;
+	// Extract bracketed alternatives: [accept X], (accept: X), [or X], (or X)
+	const bracketPattern = /[\[\(](?:accept|or):?\s+([^\]\)]+)[\]\)]/gi;
 	let match: RegExpExecArray | null;
 	while ((match = bracketPattern.exec(canonical)) !== null) {
 		const alt = match[1].trim();
@@ -93,6 +93,13 @@ function localJudge(
 
 	let bestSimilarity = 0;
 
+	const GENERIC_WORDS = new Set([
+		"river", "lake", "sea", "ocean", "mount", "mountain", "mountains", "strait", "bay", "gulf", "peninsula", "island", "islands",
+		"battle", "war", "treaty", "king", "queen", "president", "emperor", "empire", "republic", "state", "city", "county",
+		"syndrome", "effect", "law", "theory", "theorem", "equation", "formula", "constant", "principle", "rule", "model",
+		"first", "second", "third", "st", "nd", "rd", "th"
+	]);
+
 	for (const form of acceptableForms) {
 		const normalizedForm = normalize(form);
 		if (!normalizedForm) continue;
@@ -100,20 +107,26 @@ function localJudge(
 		// 1. Exact match
 		if (normalizedSubmitted === normalizedForm) return "correct";
 
-		// 2. Last-name / keyword containment
-		//    "bach" matches "johann sebastian bach"
-		//    "great gatsby" matches "the great gatsby"
+		// 2. Keyword containment (Prefix / Suffix)
+		//    "bach" matches "johann sebastian bach", "rhine" matches "rhine river"
 		const formWords = normalizedForm.split(" ");
-		if (formWords.length > 1) {
-			// Check if submitted matches the last N words of the canonical
+		
+		if (formWords.length > 1 && !GENERIC_WORDS.has(normalizedSubmitted)) {
+			// Suffix matches
 			for (let n = 1; n < formWords.length; n++) {
 				const tail = formWords.slice(-n).join(" ");
 				if (normalizedSubmitted === tail) return "correct";
 			}
+			// Prefix matches
+			for (let n = 1; n < formWords.length; n++) {
+				const head = formWords.slice(0, n).join(" ");
+				if (normalizedSubmitted === head) return "correct";
+			}
 		}
-		// Reverse: canonical is short, submitted is longer (e.g. submitted "william shakespeare", canonical "shakespeare")
+
+		// Reverse keyword containment (e.g. submitted "william shakespeare", canonical "shakespeare")
 		const submittedWords = normalizedSubmitted.split(" ");
-		if (submittedWords.length > 1 && formWords.length === 1) {
+		if (submittedWords.length > 1 && formWords.length === 1 && !GENERIC_WORDS.has(normalizedForm)) {
 			if (submittedWords.includes(normalizedForm)) return "correct";
 		}
 
@@ -126,7 +139,7 @@ function localJudge(
 		if (similarity >= similarityThreshold) return "correct";
 	}
 
-	// If very dissimilar from all acceptable forms, confidently reject
+	// Fast reject: if very dissimilar from all acceptable forms, it's likely a junk answer.
 	if (bestSimilarity < 0.3) return "incorrect";
 
 	// Ambiguous — need LLM
@@ -181,7 +194,7 @@ export async function judgeAnswer(
 // -- LLM backends --
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_JUDGE_MODEL || "claude-haiku-4-20250414";
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_JUDGE_MODEL || "claude-3-5-haiku-20241022";
 
 if (ANTHROPIC_API_KEY) {
 	log.info(`Judge LLM backend: direct API (model=${ANTHROPIC_MODEL})`);

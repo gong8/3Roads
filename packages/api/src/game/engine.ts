@@ -296,7 +296,7 @@ function revealNextWord(room: GameRoom): void {
 			if (room.phase === "reading_tossup" && room.tossupReading === tr) {
 				tossupDead(room);
 			}
-		}, 2000);
+		}, 1000);
 		return;
 	}
 
@@ -349,12 +349,12 @@ export function handleBuzz(room: GameRoom, playerId: string): void {
 		timeMs: room.settings.answerTimeMs,
 	});
 
-	// Answer timeout
+	// Answer timeout with 1s grace period for client auto-submit
 	room.answerTimer = setTimeout(() => {
 		if (room.phase === "awaiting_answer" && tr.buzzedPlayerId === playerId) {
 			handleAnswer(room, playerId, "");
 		}
-	}, room.settings.answerTimeMs);
+	}, room.settings.answerTimeMs + 1000);
 }
 
 export async function handleAnswer(room: GameRoom, playerId: string, answer: string): Promise<void> {
@@ -413,7 +413,7 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 		broadcastPlayerList(room);
 
 		// Brief pause to show correct answer before moving to bonus
-		await new Promise((r) => setTimeout(r, 2000));
+		await new Promise((r) => setTimeout(r, 800));
 
 		// Guard: if game state moved on during the pause, bail out
 		if (room.tossupReading !== tr) return;
@@ -469,7 +469,7 @@ function resumeTossup(room: GameRoom): void {
 			if (room.phase === "reading_tossup" && room.tossupReading === tr) {
 				tossupDead(room);
 			}
-		}, 2000);
+		}, 1000);
 		return;
 	}
 
@@ -537,7 +537,7 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 	broadcast(room, { type: "phase_change", phase: "reading_bonus" });
 	broadcast(room, {
 		type: "bonus_start",
-		leadin: "",
+		leadin: bonus.leadin,
 		controllingPlayerName: controllingPlayer.name,
 		controllingTeam: controllingPlayer.team,
 		category: bonus.category,
@@ -669,7 +669,7 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 					if (room.phase === "bonus_answering" && room.bonusReading === br) {
 						handleBonusAnswer(room, "");
 					}
-				}, room.settings.bonusAnswerTimeMs);
+				}, room.settings.bonusAnswerTimeMs + 1000);
 				return;
 			}
 			br.intervalHandle = setTimeout(() => {
@@ -723,7 +723,7 @@ export function handleBonusBuzz(room: GameRoom, playerId: string): void {
 		if (room.phase === "bonus_answering" && room.bonusReading === br) {
 			handleBonusAnswer(room, "");
 		}
-	}, room.settings.bonusAnswerTimeMs);
+	}, room.settings.bonusAnswerTimeMs + 1000);
 }
 
 export async function handleBonusAnswer(room: GameRoom, answer: string): Promise<void> {
@@ -786,7 +786,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 	} else {
 		setTimeout(() => {
 			sendBonusPart(room);
-		}, 1500);
+		}, 800);
 	}
 }
 

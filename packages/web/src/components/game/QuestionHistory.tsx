@@ -110,7 +110,7 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 												<div className="flex flex-col">
 													<span><span className="text-gray-400">answer: </span><span className="font-bold">{pr.answer}</span></span>
 													{!pr.correct && pr.submittedAnswer && (
-														<span className="text-gray-400">said "{pr.submittedAnswer}"</span>
+														<span className="text-gray-400"> — said "{pr.submittedAnswer}"</span>
 													)}
 												</div>
 											</div>

@@ -67,13 +67,11 @@ export function GameRoom() {
 		initRef.current = true;
 
 		if (locationState.action === "create") {
-			createRoom(locationState.questionSetId, locationState.playerName, locationState.mode, locationState.ttsEnabled ?? false);
-			if (locationState.leniency != null || locationState.readingSpeed != null) {
-				updateSettings({
-					...(locationState.leniency != null && { strictness: locationState.leniency }),
-					...(locationState.readingSpeed != null && { msPerWord: locationState.readingSpeed }),
-				});
-			}
+			createRoom(locationState.questionSetId, locationState.playerName, locationState.mode, { 
+				ttsEnabled: locationState.ttsEnabled,
+				leniency: locationState.leniency,
+				msPerWord: locationState.readingSpeed
+			});
 		} else if (locationState.action === "join" && roomCode) {
 			joinRoom(roomCode, locationState.playerName);
 		}
@@ -234,7 +232,7 @@ export function GameRoom() {
 			)}
 
 			{/* Reading Tossup / Awaiting Answer / Judging */}
-			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || state.phase === "judging" || (state.phase === "between_questions" && !state.bonus)) && state.tossup && (
+			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || (state.phase === "judging" && !state.bonus) || (state.phase === "between_questions" && !state.bonus)) && state.tossup && (
 				<div>
 					<TossupReader
 						words={state.tossup.words}
@@ -263,7 +261,7 @@ export function GameRoom() {
 						<div className="mt-2 text-xs text-gray-500">waiting for {state.awaitAnswer.playerName} to answer...</div>
 					)}
 
-					{state.phase === "judging" && (
+					{state.phase === "judging" && !state.bonus && (
 						<div className="mt-2 text-xs text-gray-500">judging...</div>
 					)}
 
@@ -278,7 +276,7 @@ export function GameRoom() {
 			)}
 
 			{/* Bonus */}
-			{(state.phase === "reading_bonus" || state.phase === "bonus_answering" || (state.phase === "between_questions" && state.bonus != null)) && state.bonus && (
+			{(state.phase === "reading_bonus" || state.phase === "bonus_answering" || (state.phase === "judging" && state.bonus != null) || (state.phase === "between_questions" && state.bonus != null)) && state.bonus && (
 				<div>
 					<BonusReader
 						leadin={state.bonus.leadin}
@@ -301,6 +299,10 @@ export function GameRoom() {
 
 					{state.phase === "bonus_answering" && !canAnswerBonus && (
 						<div className="text-xs text-gray-500 mt-2">waiting for answer...</div>
+					)}
+
+					{state.phase === "judging" && state.bonus != null && (
+						<div className="text-xs text-gray-500 mt-2">judging...</div>
 					)}
 
 

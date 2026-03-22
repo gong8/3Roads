@@ -83,7 +83,7 @@ function sendRaw(ws: WebSocket, msg: ServerMessage): void {
 async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 	switch (msg.type) {
 		case "create_room":
-			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled);
+			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled, msg.strictness, msg.msPerWord);
 			break;
 		case "join_room":
 			await handleJoinRoom(ws, msg.roomCode, msg.playerName);
@@ -135,8 +135,10 @@ async function handleCreateRoom(
 	playerName: string,
 	mode: "ffa" | "teams",
 	ttsEnabled?: boolean,
+	strictness?: number,
+	msPerWord?: number,
 ): Promise<void> {
-	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false);
+	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, strictness, msPerWord);
 	wsContext.set(ws, { roomCode: room.code, playerId });
 	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId });
 	broadcastPlayerList(room);

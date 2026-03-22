@@ -18,6 +18,7 @@ export function Generate() {
   const [tossupCount, setTossupCount] = useState(5);
   const [bonusCount, setBonusCount] = useState(5);
   const [difficulty, setDifficulty] = useState("Regular High School");
+  const [model, setModel] = useState("haiku");
   const {
     isGenerating, error, setId, status,
     tossupCount: savedTossups, bonusCount: savedBonuses,
@@ -28,7 +29,7 @@ export function Generate() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!theme.trim()) return;
-    generate(theme.trim(), tossupCount, bonusCount, difficulty);
+    generate(theme.trim(), tossupCount, bonusCount, difficulty, model);
   };
 
   const totalTarget = targetTossups + targetBonuses;
@@ -75,6 +76,18 @@ export function Generate() {
             {DIFFICULTIES.map((d) => (
               <option key={d} value={d}>{d.toLowerCase()}</option>
             ))}
+          </select>
+        </div>
+        <div className="mb-3">
+          <label className="block mb-1">model</label>
+          <select
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            className="border border-black px-2 py-1 font-mono"
+            disabled={isGenerating}
+          >
+            <option value="haiku">Claude 3.5 Haiku (Lower Quality, 10x Cheaper)</option>
+            <option value="sonnet">Claude 3.5 Sonnet (Premium Quality)</option>
           </select>
         </div>
         <div className="flex gap-4 mb-3">
