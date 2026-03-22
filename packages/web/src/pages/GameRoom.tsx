@@ -131,8 +131,12 @@ export function GameRoom() {
 				e.preventDefault();
 				buzz();
 			}
+			if (e.key === "n" && isModerator && state.phase === "between_questions") {
+				e.preventDefault();
+				nextQuestion();
+			}
 		},
-		[state.phase, canBuzzBonus, buzz],
+		[state.phase, canBuzzBonus, buzz, isModerator, nextQuestion],
 	);
 
 	useEffect(() => {
@@ -191,7 +195,7 @@ export function GameRoom() {
 			)}
 
 			{/* Reading Tossup / Awaiting Answer / Judging */}
-			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || state.phase === "judging") && state.tossup && (
+			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || state.phase === "judging" || (state.phase === "between_questions" && !state.bonus)) && state.tossup && (
 				<div>
 					<TossupReader
 						words={state.tossup.words}
@@ -237,7 +241,7 @@ export function GameRoom() {
 			)}
 
 			{/* Bonus */}
-			{(state.phase === "reading_bonus" || state.phase === "bonus_answering") && state.bonus && (
+			{(state.phase === "reading_bonus" || state.phase === "bonus_answering" || (state.phase === "between_questions" && state.bonus != null)) && state.bonus && (
 				<div>
 					<BonusReader
 						leadin={state.bonus.leadin}

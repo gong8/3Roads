@@ -168,9 +168,16 @@ export async function startTossup(room: GameRoom): Promise<void> {
 
 	const tossup = room.tossups[room.currentQuestionIndex];
 	const words = tossup.question.split(/\s+/);
-	const powerMarkWordIndex = tossup.powerMarkIndex != null
-		? charIndexToWordIndex(tossup.question, tossup.powerMarkIndex)
-		: null;
+	let powerMarkWordIndex: number | null = null;
+	for (let i = 0; i < words.length; i++) {
+		if (words[i].includes("(*)")) {
+			powerMarkWordIndex = i;
+			break;
+		}
+	}
+	if (powerMarkWordIndex === null && tossup.powerMarkIndex != null) {
+		powerMarkWordIndex = charIndexToWordIndex(tossup.question, tossup.powerMarkIndex);
+	}
 
 	// Look up pregenerated TTS audio
 	let audioUrl: string | undefined;
