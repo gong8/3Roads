@@ -350,11 +350,13 @@ export function handleBuzz(room: GameRoom, playerId: string): void {
 	});
 
 	// Answer timeout with 1s grace period for client auto-submit
+	room.answerTimerDuration = room.settings.answerTimeMs + 1000;
+	room.answerTimerStartedAt = Date.now();
 	room.answerTimer = setTimeout(() => {
 		if (room.phase === "awaiting_answer" && tr.buzzedPlayerId === playerId) {
 			handleAnswer(room, playerId, "");
 		}
-	}, room.settings.answerTimeMs + 1000);
+	}, room.answerTimerDuration);
 }
 
 export async function handleAnswer(room: GameRoom, playerId: string, answer: string): Promise<void> {
@@ -520,6 +522,9 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 		controllingTeam: controllingPlayer.team,
 		partScores: bonus.parts.map(() => null),
 		intervalHandle: null,
+		inLeadin: true,
+		leadinRevealedCount: 0,
+		partRevealedCount: 0,
 	};
 
 	room.phase = "reading_bonus";
@@ -567,14 +572,15 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 
 	const br = room.bonusReading;
 
-	const startLeadinReveals = () => {
-		// First word immediately so it syncs with audio start
-		if (leadinWords.length > 0) {
+	const startLeadinReveals = (fromIndex = 0) => {
+		if (leadinWords.length > 0 && fromIndex === 0) {
 			broadcast(room, { type: "bonus_word_reveal", word: leadinWords[0] });
+			br.leadinRevealedCount = 1;
 		}
 		const scheduleNext = (i: number) => {
 			if (i >= leadinWords.length) {
 				br.intervalHandle = null;
+				br.inLeadin = false;
 				// Brief pause after leadin finishes before first part
 				const avgDelay = leadinTotalMs / leadinWords.length;
 				const leadinPause = room.settings.ttsEnabled ? Math.max(avgDelay, 500) : 1000;
@@ -585,10 +591,11 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 			}
 			br.intervalHandle = setTimeout(() => {
 				broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
+				br.leadinRevealedCount = i + 1;
 				scheduleNext(i + 1);
 			}, leadinDelays[i]);
 		};
-		scheduleNext(1); // word 0 already revealed
+		scheduleNext(fromIndex === 0 ? 1 : fromIndex);
 	};
 
 	if (audioUrl) {
@@ -648,36 +655,26 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 		partDelays = computeWordDelays(partWords, room.settings.msPerWord * partWords.length);
 	}
 
-	const startPartReveals = () => {
-		// First word immediately so it syncs with audio start
-		if (partWords.length > 0) {
+	br.partRevealedCount = 0;
+
+	const startPartReveals = (fromIndex = 0) => {
+		if (partWords.length > 0 && fromIndex === 0) {
 			broadcast(room, { type: "bonus_word_reveal", word: partWords[0] });
+			br.partRevealedCount = 1;
 		}
 		const scheduleNext = (i: number) => {
 			if (i >= partWords.length) {
 				br.intervalHandle = null;
-				// Now open for answering
-				room.phase = "bonus_answering";
-				broadcast(room, { type: "phase_change", phase: "bonus_answering" });
-				broadcast(room, {
-					type: "await_bonus_answer",
-					controllingPlayerId: br.controllingPlayerId,
-					timeMs: room.settings.bonusAnswerTimeMs,
-				});
-
-				room.answerTimer = setTimeout(() => {
-					if (room.phase === "bonus_answering" && room.bonusReading === br) {
-						handleBonusAnswer(room, "");
-					}
-				}, room.settings.bonusAnswerTimeMs + 1000);
+				openBonusAnswering(room, br);
 				return;
 			}
 			br.intervalHandle = setTimeout(() => {
 				broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
+				br.partRevealedCount = i + 1;
 				scheduleNext(i + 1);
 			}, partDelays[i]);
 		};
-		scheduleNext(1); // word 0 already revealed
+		scheduleNext(fromIndex === 0 ? 1 : fromIndex);
 	};
 
 	if (audioUrl) {
@@ -685,6 +682,24 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 	} else {
 		startPartReveals();
 	}
+}
+
+function openBonusAnswering(room: GameRoom, br: NonNullable<GameRoom["bonusReading"]>): void {
+	room.phase = "bonus_answering";
+	broadcast(room, { type: "phase_change", phase: "bonus_answering" });
+	broadcast(room, {
+		type: "await_bonus_answer",
+		controllingPlayerId: br.controllingPlayerId,
+		timeMs: room.settings.bonusAnswerTimeMs,
+	});
+
+	room.answerTimerDuration = room.settings.bonusAnswerTimeMs + 1000;
+	room.answerTimerStartedAt = Date.now();
+	room.answerTimer = setTimeout(() => {
+		if (room.phase === "bonus_answering" && room.bonusReading === br) {
+			handleBonusAnswer(room, "");
+		}
+	}, room.answerTimerDuration);
 }
 
 export function handleBonusBuzz(room: GameRoom, playerId: string): void {
@@ -710,20 +725,8 @@ export function handleBonusBuzz(room: GameRoom, playerId: string): void {
 	}
 
 	// Transition to bonus answering
-	room.phase = "bonus_answering";
 	room.lastActivity = Date.now();
-	broadcast(room, { type: "phase_change", phase: "bonus_answering" });
-	broadcast(room, {
-		type: "await_bonus_answer",
-		controllingPlayerId: br.controllingPlayerId,
-		timeMs: room.settings.bonusAnswerTimeMs,
-	});
-
-	room.answerTimer = setTimeout(() => {
-		if (room.phase === "bonus_answering" && room.bonusReading === br) {
-			handleBonusAnswer(room, "");
-		}
-	}, room.settings.bonusAnswerTimeMs + 1000);
+	openBonusAnswering(room, br);
 }
 
 export async function handleBonusAnswer(room: GameRoom, answer: string): Promise<void> {
@@ -819,6 +822,114 @@ function advanceToNextQuestion(room: GameRoom): void {
 	room.lastActivity = Date.now();
 	broadcast(room, { type: "phase_change", phase: "between_questions" });
 	broadcastPlayerList(room);
+}
+
+export function pauseGame(room: GameRoom): void {
+	const pauseablePhases = ["reading_tossup", "reading_bonus", "between_questions", "judging"];
+	if (!pauseablePhases.includes(room.phase)) return;
+
+	room.pausedPhase = room.phase;
+
+	// Stop word reveal timers
+	cancelPendingAudioReady(room);
+	const tr = room.tossupReading;
+	if (tr?.intervalHandle) {
+		clearTimeout(tr.intervalHandle);
+		tr.intervalHandle = null;
+	}
+	const br = room.bonusReading;
+	if (br?.intervalHandle) {
+		clearTimeout(br.intervalHandle);
+		br.intervalHandle = null;
+	}
+
+	// Stop answer timer and record remaining time
+	if (room.answerTimer && room.answerTimerStartedAt != null && room.answerTimerDuration != null) {
+		clearTimeout(room.answerTimer);
+		room.answerTimer = null;
+		room.answerTimerRemaining = Math.max(0, room.answerTimerDuration - (Date.now() - room.answerTimerStartedAt));
+	}
+
+	room.phase = "paused";
+	room.lastActivity = Date.now();
+	broadcast(room, { type: "phase_change", phase: "paused" });
+	log.info(`Room ${room.code} — paused (was ${room.pausedPhase})`);
+}
+
+export function resumeGame(room: GameRoom): void {
+	if (room.phase !== "paused" || !room.pausedPhase) return;
+
+	const resumePhase = room.pausedPhase;
+	room.pausedPhase = null;
+	room.phase = resumePhase;
+	room.lastActivity = Date.now();
+
+	broadcast(room, { type: "phase_change", phase: resumePhase });
+	log.info(`Room ${room.code} — resumed to ${resumePhase}`);
+
+	// Resume word reveals or answer timers from where we left off
+	if (resumePhase === "reading_tossup") {
+		const tr = room.tossupReading;
+		if (tr && tr.revealedCount < tr.words.length) {
+			const scheduleNext = (index: number) => {
+				if (index >= tr.words.length) return;
+				tr.intervalHandle = setTimeout(() => {
+					revealNextWord(room);
+					scheduleNext(index + 1);
+				}, tr.wordDelays[index]);
+			};
+			scheduleNext(tr.revealedCount);
+		}
+	} else if (resumePhase === "reading_bonus") {
+		const br = room.bonusReading;
+		if (br) {
+			if (br.inLeadin) {
+				// Resume leadin word reveals from current position
+				const leadinWords = br.leadin.split(/\s+/);
+				const leadinDelays = computeWordDelays(leadinWords, room.settings.msPerWord * leadinWords.length);
+				const from = br.leadinRevealedCount;
+				const scheduleNext = (i: number) => {
+					if (i >= leadinWords.length) {
+						br.intervalHandle = null;
+						br.inLeadin = false;
+						const leadinPause = 1000;
+						setTimeout(() => { sendBonusPart(room); }, leadinPause);
+						return;
+					}
+					br.intervalHandle = setTimeout(() => {
+						broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
+						br.leadinRevealedCount = i + 1;
+						scheduleNext(i + 1);
+					}, leadinDelays[i]);
+				};
+				scheduleNext(from);
+			} else {
+				// Resume part word reveals from current position (no bonus_part re-broadcast)
+				const part = br.parts[br.currentPart];
+				const partWords = part.text.split(/\s+/);
+				const partDelays = computeWordDelays(partWords, room.settings.msPerWord * partWords.length);
+				const from = br.partRevealedCount;
+				if (from >= partWords.length) {
+					// All words already revealed, just open answering
+					openBonusAnswering(room, br);
+				} else {
+					const scheduleNext = (i: number) => {
+						if (i >= partWords.length) {
+							br.intervalHandle = null;
+							openBonusAnswering(room, br);
+							return;
+						}
+						br.intervalHandle = setTimeout(() => {
+							broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
+							br.partRevealedCount = i + 1;
+							scheduleNext(i + 1);
+						}, partDelays[i]);
+					};
+					scheduleNext(from);
+				}
+			}
+		}
+	}
 }
 
 export function skipQuestion(room: GameRoom): void {

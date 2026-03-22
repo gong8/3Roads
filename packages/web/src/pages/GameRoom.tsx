@@ -38,6 +38,8 @@ export function GameRoom() {
 		state,
 		createRoom,
 		joinRoom,
+		pause,
+		resume,
 		buzz,
 		submitAnswer,
 		submitBonusAnswer,
@@ -115,7 +117,7 @@ export function GameRoom() {
 	})();
 
 	const canBuzzBonus = (() => {
-		if (state.phase !== "reading_bonus" || !state.bonus) return false;
+		if (state.phase !== "reading_bonus" || !state.bonus || !state.bonus.currentPart) return false;
 		const controlling = state.players.find((p) => p.name === state.bonus?.controllingPlayerName);
 		if (!controlling || !myPlayer) return false;
 		if (controlling.id === state.playerId) return true;
@@ -134,8 +136,17 @@ export function GameRoom() {
 				e.preventDefault();
 				nextQuestion();
 			}
+			if (e.key === "s" && isModerator && state.phase === "lobby") {
+				e.preventDefault();
+				startGame();
+			}
+			if (e.key === "p" && isModerator) {
+				e.preventDefault();
+				if (state.phase === "paused") resume();
+				else pause();
+			}
 		},
-		[state.phase, canBuzzBonus, buzz, isModerator, nextQuestion],
+		[state.phase, canBuzzBonus, buzz, isModerator, nextQuestion, startGame, pause, resume],
 	);
 
 	useEffect(() => {
@@ -232,7 +243,7 @@ export function GameRoom() {
 			)}
 
 			{/* Reading Tossup / Awaiting Answer / Judging */}
-			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || (state.phase === "judging" && !state.bonus) || (state.phase === "between_questions" && !state.bonus)) && state.tossup && (
+			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || (state.phase === "paused" && !state.bonus) || (state.phase === "judging" && !state.bonus) || (state.phase === "between_questions" && !state.bonus)) && state.tossup && (
 				<div>
 					<TossupReader
 						words={state.tossup.words}
@@ -276,7 +287,7 @@ export function GameRoom() {
 			)}
 
 			{/* Bonus */}
-			{(state.phase === "reading_bonus" || state.phase === "bonus_answering" || (state.phase === "judging" && state.bonus != null) || (state.phase === "between_questions" && state.bonus != null)) && state.bonus && (
+			{(state.phase === "reading_bonus" || state.phase === "bonus_answering" || (state.phase === "paused" && state.bonus != null) || (state.phase === "judging" && state.bonus != null) || (state.phase === "between_questions" && state.bonus != null)) && state.bonus && (
 				<div>
 					<BonusReader
 						leadin={state.bonus.leadin}
@@ -343,6 +354,16 @@ export function GameRoom() {
 					<button type="button" onClick={() => navigate("/play")} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
 						back to lobby
 					</button>
+				</div>
+			)}
+
+			{/* Paused banner */}
+			{state.phase === "paused" && (
+				<div className="my-4 border border-black px-4 py-3 text-sm flex items-center justify-between">
+					<span className="font-bold">paused</span>
+					{isModerator && (
+						<button type="button" onClick={resume} className="text-xs underline hover:text-gray-500">resume (p)</button>
+					)}
 				</div>
 			)}
 

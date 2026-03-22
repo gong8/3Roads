@@ -10,6 +10,7 @@ export type GamePhase =
 	| "reading_bonus"
 	| "bonus_answering"
 	| "between_questions"
+	| "paused"
 	| "game_over";
 
 export type GameMode = "ffa" | "teams";
@@ -68,6 +69,9 @@ export interface BonusReading {
 	controllingTeam?: Team;
 	partScores: (boolean | null)[];
 	intervalHandle: ReturnType<typeof setTimeout> | null;
+	inLeadin: boolean;
+	leadinRevealedCount: number;
+	partRevealedCount: number;
 }
 
 export interface GameSettings {
@@ -93,6 +97,10 @@ export interface GameRoom {
 	settings: GameSettings;
 	lastActivity: number;
 	answerTimer: ReturnType<typeof setTimeout> | null;
+	answerTimerStartedAt: number | null;
+	answerTimerDuration: number | null;
+	pausedPhase: GamePhase | null;
+	answerTimerRemaining: number | null;
 	ttsCache: Map<string, { audioId: string; durationMs: number; wordDelays: number[] | null }>;
 	pendingAudioReady: (() => void) | null;
 	audioReadyTimeout: ReturnType<typeof setTimeout> | null;
@@ -172,6 +180,14 @@ export interface UpdateSettingsMsg {
 	msPerWord?: number;
 }
 
+export interface PauseMsg {
+	type: "pause";
+}
+
+export interface ResumeMsg {
+	type: "resume";
+}
+
 export type ClientMessage =
 	| CreateRoomMsg
 	| JoinRoomMsg
@@ -186,7 +202,9 @@ export type ClientMessage =
 	| SetTeamMsg
 	| UpdateSettingsMsg
 	| AudioReadyMsg
-	| CancelTtsMsg;
+	| CancelTtsMsg
+	| PauseMsg
+	| ResumeMsg;
 
 // -- Server -> Client messages --
 

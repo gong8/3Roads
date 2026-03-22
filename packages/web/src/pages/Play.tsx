@@ -2,12 +2,56 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useSets } from "../hooks/useSets";
 
+const ADJECTIVES = [
+	"amber", "ancient", "arctic", "autumn", "azure", "bold", "brave", "bright", "bronze", "calm",
+	"candid", "cardinal", "casual", "clever", "coastal", "cobalt", "cosmic", "crisp", "crimson", "curious",
+	"daring", "dark", "dawnlit", "deft", "dense", "desert", "distant", "dusk", "dusty", "eager",
+	"early", "electric", "ember", "emerald", "epic", "feral", "fierce", "fiery", "fleet", "foggy",
+	"forest", "frosted", "gallant", "gilded", "glacial", "golden", "grand", "grave", "green", "grim",
+	"haunted", "hollow", "humble", "hungry", "icy", "idle", "indigo", "iron", "jade", "jagged",
+	"keen", "kind", "lanky", "large", "late", "lavender", "lean", "light", "lofty", "lone",
+	"loud", "loyal", "lunar", "lush", "marble", "mellow", "mighty", "misty", "modest", "mossy",
+	"murky", "mystic", "neon", "nimble", "noble", "nocturnal", "odd", "onyx", "open", "pale",
+	"patient", "pebbled", "pensive", "phantom", "plain", "polar", "primal", "proud", "quiet", "rapid",
+	"raven", "red", "regal", "remote", "restless", "rocky", "roving", "rugged", "russet", "rustic",
+	"sage", "sandy", "sapphire", "savage", "scarlet", "serene", "shadowed", "shaggy", "sharp", "silent",
+	"silver", "sleek", "slim", "slow", "small", "smoky", "snowy", "solar", "solemn", "spare",
+	"spectral", "speedy", "stark", "steady", "steep", "stony", "stormy", "strange", "sturdy", "subtle",
+	"sunlit", "swift", "tall", "tawny", "thorny", "tidal", "timber", "timid", "tiny", "tireless",
+	"tough", "tranquil", "twilight", "umber", "vast", "velvet", "verdant", "vibrant", "vigilant", "violet",
+	"wandering", "wary", "weathered", "wild", "windy", "wise", "wiry", "worn", "zealous", "zesty",
+];
+
+const ANIMALS = [
+	"albatross", "alligator", "alpaca", "antelope", "armadillo", "badger", "bat", "bear", "beaver", "bison",
+	"boar", "bobcat", "buffalo", "bull", "capybara", "caracal", "cassowary", "cheetah", "chinchilla", "condor",
+	"cormorant", "cougar", "coyote", "crane", "crow", "dingo", "dolphin", "dormouse", "eagle", "echidna",
+	"eel", "egret", "elk", "falcon", "ferret", "finch", "flamingo", "fox", "frog", "gazelle",
+	"gecko", "gerbil", "gibbon", "gopher", "gorilla", "grackle", "grouse", "guanaco", "gull", "hawk",
+	"hedgehog", "heron", "hippo", "hornbill", "horse", "hyena", "ibis", "iguana", "impala", "jackal",
+	"jaguar", "jay", "jellyfish", "kestrel", "kingfisher", "kite", "kiwi", "koala", "komodo", "kookaburra",
+	"lemur", "leopard", "lion", "lizard", "llama", "lobster", "lynx", "macaw", "marmot", "meerkat",
+	"mink", "moose", "moth", "mule", "narwhal", "newt", "nightjar", "ocelot", "okapi", "osprey",
+	"otter", "owl", "panda", "panther", "parrot", "pelican", "penguin", "peregrine", "pheasant", "pika",
+	"piranha", "platypus", "porcupine", "puma", "python", "quail", "quokka", "rabbit", "raccoon", "raven",
+	"reindeer", "rhino", "roadrunner", "salamander", "seahorse", "seal", "serval", "shark", "skunk", "sloth",
+	"snail", "snake", "sparrow", "squid", "squirrel", "starling", "stork", "sturgeon", "swift", "tapir",
+	"teal", "termite", "tiger", "toad", "tortoise", "toucan", "viper", "vole", "vulture", "walrus",
+	"warthog", "wasp", "weasel", "whale", "wildcat", "wolf", "wolverine", "wombat", "woodpecker", "yak",
+];
+
+function randomDefaultName(): string {
+	const adj = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
+	const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
+	return `${adj}-${animal}`;
+}
+
 type Tab = "create" | "join";
 
 export function Play() {
 	const navigate = useNavigate();
 	const [tab, setTab] = useState<Tab>("create");
-	const [name, setName] = useState("");
+	const [name, setName] = useState(() => randomDefaultName());
 	const [roomCode, setRoomCode] = useState("");
 	const [selectedSetId, setSelectedSetId] = useState("");
 	const [mode, setMode] = useState<"ffa" | "teams">("ffa");

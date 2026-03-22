@@ -26,16 +26,12 @@ export function BonusReader({ leadin, controllingPlayerName, category, subcatego
 				<span>bonus for {controllingPlayerName}</span>
 			</div>
 
-			{/* Leadin text shown either as completed (if on part > 0) or word-by-word */}
-			<div className="mb-4 text-sm leading-relaxed text-gray-800">
-				{(!currentPart && words.length > 0) ? (
-					words.join(" ")
-				) : (
-					leadin
-				)}
+			{/* Leadin — informational intro */}
+			<div className="mb-4 text-sm leading-relaxed text-gray-700 italic">
+				{(!currentPart && words.length > 0) ? words.join(" ") : leadin}
 			</div>
 
-			{partResults.map((r, idx) => (
+			{partResults.map((r) => (
 				<div key={r.partNumber} className="ml-4 mb-4 text-xs border-l-2 border-gray-200 pl-3">
 					{r.partText && <div className="mb-1 text-sm text-gray-800">{r.partText}</div>}
 					<div className="flex items-center gap-2">

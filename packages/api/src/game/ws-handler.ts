@@ -10,6 +10,8 @@ import {
 	handleBonusBuzz,
 	handleBuzz,
 	nextQuestion,
+	pauseGame,
+	resumeGame,
 	sendTo,
 	skipQuestion,
 	pregenerateTTS,
@@ -123,6 +125,12 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 			break;
 		case "update_settings":
 			handleUpdateSettings(ws, msg);
+			break;
+		case "pause":
+			handlePause(ws);
+			break;
+		case "resume":
+			handleResume(ws);
 			break;
 		default:
 			sendRaw(ws, { type: "error", message: "Unknown message type" });
@@ -314,6 +322,18 @@ function handleUpdateSettings(ws: WebSocket, msg: { strictness?: number; msPerWo
 	if (msg.msPerWord != null) {
 		ctx.room.settings.msPerWord = Math.max(100, Math.min(500, Math.round(msg.msPerWord)));
 	}
+}
+
+function handlePause(ws: WebSocket): void {
+	const ctx = requireModerator(ws);
+	if (!ctx) return;
+	pauseGame(ctx.room);
+}
+
+function handleResume(ws: WebSocket): void {
+	const ctx = requireModerator(ws);
+	if (!ctx) return;
+	resumeGame(ctx.room);
 }
 
 function handleSetTeam(ws: WebSocket, targetPlayerId: string, team: "a" | "b"): void {

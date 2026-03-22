@@ -210,11 +210,12 @@ async function fetchJudge(systemPrompt: string, userPrompt: string): Promise<str
 			"Content-Type": "application/json",
 			"x-api-key": ANTHROPIC_API_KEY,
 			"anthropic-version": "2023-06-01",
+			"anthropic-beta": "prompt-caching-2024-07-31",
 		},
 		body: JSON.stringify({
 			model: ANTHROPIC_MODEL,
 			max_tokens: 16,
-			system: systemPrompt,
+			system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
 			messages: [{ role: "user", content: userPrompt }],
 		}),
 		signal: AbortSignal.timeout(10000),

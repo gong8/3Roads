@@ -10,6 +10,7 @@ type GamePhase =
 	| "reading_bonus"
 	| "bonus_answering"
 	| "between_questions"
+	| "paused"
 	| "game_over";
 
 type Team = "a" | "b";
@@ -407,6 +408,8 @@ export function useGameRoom() {
 		[connect, send],
 	);
 
+	const pause = useCallback(() => send({ type: "pause" }), [send]);
+	const resume = useCallback(() => send({ type: "resume" }), [send]);
 	const buzz = useCallback(() => send({ type: "buzz" }), [send]);
 	const submitAnswer = useCallback((answer: string) => send({ type: "submit_answer", answer }), [send]);
 	const submitBonusAnswer = useCallback((answer: string) => send({ type: "submit_bonus_answer", answer }), [send]);
@@ -429,6 +432,8 @@ export function useGameRoom() {
 		state,
 		createRoom,
 		joinRoom,
+		pause,
+		resume,
 		buzz,
 		submitAnswer,
 		submitBonusAnswer,

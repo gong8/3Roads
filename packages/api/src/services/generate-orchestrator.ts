@@ -67,7 +67,7 @@ Calibrate clue difficulty and answer selection to the "${difficulty}" level:
 
 ## BONUS FORMAT
 Each bonus has:
-- **Leadin:** A thematic introduction connecting the three parts (1-2 sentences)
+- **Leadin:** A plain declarative statement naming the subject of the bonus — NOT a clue, NOT a question, NOT a hint. It tells the players what the bonus is about. Examples: "This bonus is about the French Revolution.", "Answer these questions about mitosis.", "For 10 points each, name these works by Shakespeare." Never write the leadin as a riddle or teaser like "This country is renowned for its linguistic diversity" — instead write "This bonus is about Switzerland."
 - **Part 1 [10]:** Easiest — most players at this difficulty should get it
 - **Part 2 [10]:** Medium — requires solid knowledge
 - **Part 3 [10]:** Hardest — challenges even strong players
@@ -154,7 +154,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		if (bonusCount > 0) {
 			const answerList = plan.bonus_answers.slice(0, bonusCount).join("\n- ");
-			const bonusPrompt = `Write ${bonusCount} bonuses. Each bonus's leadin/theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The bonus leadin should connect to the assigned topic. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
+			const bonusPrompt = `Write ${bonusCount} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
 
 			tasks.push(
 				runCliChat({
