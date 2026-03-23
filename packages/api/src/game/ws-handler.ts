@@ -16,6 +16,7 @@ import {
 	skipQuestion,
 	pregenerateTTS,
 	startGame,
+	buildGameSync,
 } from "./engine.js";
 import {
 	activeRooms,
@@ -152,7 +153,7 @@ async function handleCreateRoom(
 ): Promise<void> {
 	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, includeBonuses, strictness, msPerWord);
 	wsContext.set(ws, { roomCode: room.code, playerId });
-	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId });
+	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId, packetName: room.questionSetName });
 	broadcastPlayerList(room);
 
 	// Fire-and-forget: start TTS pregeneration in background
@@ -171,21 +172,23 @@ async function handleJoinRoom(
 	if (reconnected) {
 		const { room, playerId } = reconnected;
 		wsContext.set(ws, { roomCode, playerId });
-		sendRaw(ws, { type: "room_joined", roomCode, playerId });
+		sendRaw(ws, { type: "room_joined", roomCode, playerId, packetName: room.questionSetName });
 		broadcast(room, { type: "player_reconnected", playerId, playerName });
 		broadcastPlayerList(room);
-		// Send current phase so reconnected player can catch up
-		sendRaw(ws, { type: "phase_change", phase: room.phase });
+		if (room.phase !== "lobby") {
+			sendRaw(ws, { type: "phase_change", phase: room.phase });
+			sendRaw(ws, buildGameSync(room));
+		}
 		return;
 	}
 
 	const { room, playerId } = joinRoom(roomCode, playerName, ws);
 	wsContext.set(ws, { roomCode, playerId });
-	sendRaw(ws, { type: "room_joined", roomCode, playerId });
+	sendRaw(ws, { type: "room_joined", roomCode, playerId, packetName: room.questionSetName });
 	broadcastPlayerList(room);
-	// Send current phase so mid-game joiners can catch up
 	if (room.phase !== "lobby") {
 		sendRaw(ws, { type: "phase_change", phase: room.phase });
+		sendRaw(ws, buildGameSync(room));
 	}
 }
 

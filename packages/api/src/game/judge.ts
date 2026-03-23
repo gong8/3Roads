@@ -45,131 +45,40 @@ function normalize(answer: string): string {
 		.trim();
 }
 
-/** Standard Levenshtein distance between two strings. */
-function levenshtein(a: string, b: string): number {
-	if (a.length === 0) return b.length;
-	if (b.length === 0) return a.length;
-
-	const matrix: number[][] = [];
-	for (let i = 0; i <= a.length; i++) {
-		matrix[i] = [i];
-	}
-	for (let j = 0; j <= b.length; j++) {
-		matrix[0][j] = j;
-	}
-
-	for (let i = 1; i <= a.length; i++) {
-		for (let j = 1; j <= b.length; j++) {
-			const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-			matrix[i][j] = Math.min(
-				matrix[i - 1][j] + 1,       // deletion
-				matrix[i][j - 1] + 1,       // insertion
-				matrix[i - 1][j - 1] + cost, // substitution
-			);
-		}
-	}
-	return matrix[a.length][b.length];
-}
-
 /**
  * Fast local judge. Returns "correct", "incorrect", or "unsure".
  * "unsure" means we need to fall back to the LLM.
  */
+/**
+ * Very strict local judge. Only accepts exact normalized matches
+ * (case-insensitive, stripped articles/punctuation). Everything else
+ * goes to Claude Haiku.
+ */
 function localJudge(
 	submitted: string,
 	canonical: string,
-	strictness: number,
-): "correct" | "incorrect" | "unsure" {
+): "correct" | "unsure" {
 	const normalizedSubmitted = normalize(submitted);
-	if (!normalizedSubmitted) return "incorrect";
+	if (!normalizedSubmitted) return "unsure";
 
 	const acceptableForms = parseAcceptableAnswers(canonical);
-
-	// Strictness-adjusted similarity threshold:
-	//   strictness 1 (strict)  → 0.90
-	//   strictness 7 (default) → 0.72
-	//   strictness 10 (lenient) → 0.63
-	const similarityThreshold = 0.93 - strictness * 0.03;
-
-	let bestSimilarity = 0;
-
-	const GENERIC_WORDS = new Set([
-		"river", "lake", "sea", "ocean", "mount", "mountain", "mountains", "strait", "bay", "gulf", "peninsula", "island", "islands",
-		"battle", "war", "treaty", "king", "queen", "president", "emperor", "empire", "republic", "state", "city", "county",
-		"syndrome", "effect", "law", "theory", "theorem", "equation", "formula", "constant", "principle", "rule", "model",
-		"first", "second", "third", "st", "nd", "rd", "th"
-	]);
-
-	const ADJECTIVE_SUFFIXES = ["an", "ian", "ean", "ish", "ese", "ic", "ine", "i", "n"];
 
 	for (const form of acceptableForms) {
 		const normalizedForm = normalize(form);
 		if (!normalizedForm) continue;
 
-		// 1. Exact match
+		// Only accept exact normalized matches
 		if (normalizedSubmitted === normalizedForm) return "correct";
 
-		// 1b. Order-agnostic match for conjunctive answers ("spain and france" == "france and spain")
+		// Order-agnostic match for conjunctive answers ("spain and france" == "france and spain")
 		const splitPattern = /\s+and\s+|\s*[,&]\s*/;
 		if (splitPattern.test(normalizedForm) || splitPattern.test(normalizedSubmitted)) {
 			const sortParts = (s: string) => s.split(splitPattern).map((p) => p.trim()).filter(Boolean).sort().join(" ");
 			if (sortParts(normalizedSubmitted) === sortParts(normalizedForm)) return "correct";
 		}
-
-		// 2. Adjective/demonym form: submitted is a common adjectival derivation of the canonical answer
-		//    e.g. "italian" for "italy", "french" for "france", "american" for "america"
-		if (normalizedForm.length >= 3) {
-			for (const suffix of ADJECTIVE_SUFFIXES) {
-				// Try stripping suffix from submitted to see if it matches (allowing 1-char stem mutation)
-				if (normalizedSubmitted.endsWith(suffix) && normalizedSubmitted.length > suffix.length) {
-					const stem = normalizedSubmitted.slice(0, -suffix.length);
-					// Exact stem match or 1-char difference at the end (e.g. italy→italian: y→i)
-					if (normalizedForm === stem ||
-						(normalizedForm.length >= stem.length &&
-							normalizedForm.slice(0, stem.length - 1) === stem.slice(0, -1) &&
-							stem.length >= 3)) {
-						return "correct";
-					}
-				}
-			}
-		}
-
-		// 3. Keyword containment (Prefix / Suffix)
-		//    "bach" matches "johann sebastian bach", "rhine" matches "rhine river"
-		const formWords = normalizedForm.split(" ");
-
-		if (formWords.length > 1 && !GENERIC_WORDS.has(normalizedSubmitted)) {
-			// Suffix matches
-			for (let n = 1; n < formWords.length; n++) {
-				const tail = formWords.slice(-n).join(" ");
-				if (normalizedSubmitted === tail) return "correct";
-			}
-			// Prefix matches
-			for (let n = 1; n < formWords.length; n++) {
-				const head = formWords.slice(0, n).join(" ");
-				if (normalizedSubmitted === head) return "correct";
-			}
-		}
-
-		// Reverse keyword containment (e.g. submitted "william shakespeare", canonical "shakespeare")
-		const submittedWords = normalizedSubmitted.split(" ");
-		if (submittedWords.length > 1 && formWords.length === 1 && !GENERIC_WORDS.has(normalizedForm)) {
-			if (submittedWords.includes(normalizedForm)) return "correct";
-		}
-
-		// 3. Levenshtein similarity
-		const dist = levenshtein(normalizedSubmitted, normalizedForm);
-		const maxLen = Math.max(normalizedSubmitted.length, normalizedForm.length);
-		const similarity = maxLen > 0 ? 1 - dist / maxLen : 0;
-		bestSimilarity = Math.max(bestSimilarity, similarity);
-
-		if (similarity >= similarityThreshold) return "correct";
 	}
 
-	// Fast reject: if very dissimilar from all acceptable forms, it's likely a junk answer.
-	if (bestSimilarity < 0.3) return "incorrect";
-
-	// Ambiguous — need LLM
+	// Everything else goes to LLM
 	return "unsure";
 }
 
@@ -185,9 +94,8 @@ export async function judgeAnswer(
 		return { correct: false };
 	}
 
-	// Fast path: try local matching first
-	// Local judge can only confirm correct answers — if it says "incorrect", defer to LLM
-	const localVerdict = localJudge(submittedAnswer, canonicalAnswer, strictness);
+	// Fast path: only accept exact normalized matches locally
+	const localVerdict = localJudge(submittedAnswer, canonicalAnswer);
 	if (localVerdict === "correct") {
 		log.info(`judge [local] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=correct`);
 		return { correct: true };

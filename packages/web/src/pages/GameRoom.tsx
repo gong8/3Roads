@@ -161,7 +161,7 @@ export function GameRoom() {
 		return () => window.removeEventListener("keydown", handleKeyDown);
 	}, [handleKeyDown]);
 
-	const [showScoreboard, setShowScoreboard] = useState(false);
+	const [showScoreboard, setShowScoreboard] = useState(true);
 
 	const displayCode = state.roomCode || roomCode;
 
@@ -172,9 +172,9 @@ export function GameRoom() {
 	return (
 		<>
 			{/* Hideable Left Scoreboard */}
-			{!showScoreboard && state.phase !== "lobby" && (
-				<button 
-					type="button" 
+			{!showScoreboard && (
+				<button
+					type="button"
 					onClick={() => setShowScoreboard(true)}
 					className="fixed left-0 top-[15%] bg-white border border-l-0 border-black px-2 py-3 text-xs z-40 shadow-sm hover:bg-gray-50 rounded-r cursor-pointer opacity-80 hover:opacity-100"
 					style={{ writingMode: 'vertical-rl' }}
@@ -186,9 +186,7 @@ export function GameRoom() {
 			<div className={`fixed left-0 top-0 bottom-0 w-72 bg-white border-r border-black p-4 z-40 shadow-2xl overflow-y-auto flex flex-col transition-transform ${showScoreboard ? "translate-x-0" : "-translate-x-full"}`}>
 				<div className="flex justify-between items-center mb-6">
 					<div className="font-bold">scoreboard</div>
-					{state.phase !== "lobby" && (
-						<button type="button" onClick={() => setShowScoreboard(false)} className="text-xl leading-none hover:text-gray-500">&times;</button>
-					)}
+					<button type="button" onClick={() => setShowScoreboard(false)} className="text-xl leading-none hover:text-gray-500">&times;</button>
 				</div>
 				<Scoreboard 
 					players={state.phase === "game_over" && state.gameOverPlayers 
@@ -218,6 +216,9 @@ export function GameRoom() {
 				{/* Lobby */}
 				{state.phase === "lobby" && (
 					<div>
+						{state.packetName && (
+							<div className="mb-2 text-xs text-gray-500">packet: <span className="text-black font-bold">{state.packetName}</span></div>
+						)}
 						<div className="mb-3 text-xs text-gray-500">
 							share code: <span className="text-black font-bold text-lg">{displayCode}</span>
 						</div>

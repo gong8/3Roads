@@ -1,7 +1,7 @@
 import { createLogger } from "@3roads/shared";
 import { judgeAnswer } from "./judge.js";
 import { generateTTS, storeAudio } from "./tts.js";
-import type { GameRoom, Player, ServerMessage, TossupReading } from "./types.js";
+import type { GameRoom, GameSyncEvt, Player, ServerMessage, TossupReading } from "./types.js";
 
 const log = createLogger("api:game:engine");
 
@@ -59,6 +59,114 @@ export function broadcastPlayerList(room: GameRoom): void {
 			team: p.team,
 		})),
 	});
+}
+
+// -- Game sync for mid-game joiners --
+
+export function buildGameSync(room: GameRoom): GameSyncEvt {
+	const tr = room.tossupReading;
+	const br = room.bonusReading;
+
+	let tossup: GameSyncEvt["tossup"] = null;
+	if (tr) {
+		const tossupData = room.tossups[tr.tossupIndex];
+		const isPowerZone = tr.powerMarkWordIndex != null && tr.revealedCount <= tr.powerMarkWordIndex + 1;
+		tossup = {
+			questionNumber: room.currentQuestionIndex + 1,
+			totalQuestions: room.tossups.length,
+			category: tossupData.category,
+			subcategory: tossupData.subcategory,
+			words: tr.words.slice(0, tr.revealedCount),
+			isPowerZone,
+			currentBuzzes: [],
+		};
+	}
+
+	let bonus: GameSyncEvt["bonus"] = null;
+	if (br) {
+		const bonusData = room.bonuses[br.bonusIndex];
+		const controllingPlayer = room.players.get(br.controllingPlayerId);
+
+		// Collect words revealed so far
+		const words: string[] = [];
+		if (br.inLeadin) {
+			const leadinWords = br.leadin.split(/\s+/);
+			words.push(...leadinWords.slice(0, br.leadinRevealedCount));
+		} else if (br.currentPart < br.parts.length) {
+			const partWords = br.parts[br.currentPart].text.split(/\s+/);
+			words.push(...partWords.slice(0, br.partRevealedCount));
+		}
+
+		// Build part results for completed parts
+		const partResults: GameSyncEvt["bonus"] extends null ? never : NonNullable<GameSyncEvt["bonus"]>["partResults"] = [];
+		for (let i = 0; i < br.currentPart; i++) {
+			const correct = br.partScores[i] === true;
+			partResults.push({
+				partNumber: i + 1,
+				correct,
+				answer: br.parts[i].answer,
+				submittedAnswer: "",
+				points: correct ? br.parts[i].value : 0,
+				partText: br.parts[i].text,
+			});
+		}
+
+		// Determine current part info (null if in leadin)
+		let currentPart: { partNumber: number; value: number } | null = null;
+		if (!br.inLeadin && br.currentPart < br.parts.length) {
+			currentPart = { partNumber: br.currentPart + 1, value: br.parts[br.currentPart].value };
+		}
+
+		bonus = {
+			leadin: bonusData.leadin,
+			controllingPlayerName: controllingPlayer?.name ?? "unknown",
+			controllingTeam: br.controllingTeam,
+			category: bonusData.category,
+			subcategory: bonusData.subcategory,
+			words,
+			currentPart,
+			partResults,
+			totalPoints: null,
+		};
+	}
+
+	// Determine buzzed player
+	let buzzedPlayer: GameSyncEvt["buzzedPlayer"] = null;
+	if (tr?.buzzedPlayerId) {
+		const p = room.players.get(tr.buzzedPlayerId);
+		if (p) buzzedPlayer = { id: p.id, name: p.name };
+	}
+
+	// Determine await answer state
+	let awaitAnswer: GameSyncEvt["awaitAnswer"] = null;
+	if (room.phase === "awaiting_answer" && tr?.buzzedPlayerId && room.answerTimerStartedAt && room.answerTimerDuration) {
+		const elapsed = Date.now() - room.answerTimerStartedAt;
+		const remaining = Math.max(0, room.answerTimerDuration - elapsed);
+		const p = room.players.get(tr.buzzedPlayerId);
+		if (p) {
+			awaitAnswer = { playerId: p.id, playerName: p.name, timeMs: remaining };
+		}
+	}
+
+	let awaitBonusAnswer: GameSyncEvt["awaitBonusAnswer"] = null;
+	if (room.phase === "bonus_answering" && br && room.answerTimerStartedAt && room.answerTimerDuration) {
+		const elapsed = Date.now() - room.answerTimerStartedAt;
+		const remaining = Math.max(0, room.answerTimerDuration - elapsed);
+		awaitBonusAnswer = { controllingPlayerId: br.controllingPlayerId, timeMs: remaining };
+	}
+
+	// Negged player IDs
+	const neggedPlayerIds = tr ? [...tr.incorrectBuzzers] : [];
+
+	return {
+		type: "game_sync",
+		tossup,
+		bonus,
+		buzzedPlayer,
+		awaitAnswer,
+		awaitBonusAnswer,
+		neggedPlayerIds,
+	};
 }
 
 // -- Word splitting and power mark --

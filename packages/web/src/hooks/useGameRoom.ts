@@ -78,6 +78,7 @@ export interface GameState {
 	connected: boolean;
 	roomCode: string | null;
 	playerId: string | null;
+	packetName: string | null;
 	phase: GamePhase;
 	players: PlayerInfo[];
 	tossup: TossupState | null;
@@ -99,8 +100,8 @@ export interface GameState {
 type Action =
 	| { type: "connected" }
 	| { type: "disconnected" }
-	| { type: "room_created"; roomCode: string; playerId: string }
-	| { type: "room_joined"; roomCode: string; playerId: string }
+	| { type: "room_created"; roomCode: string; playerId: string; packetName: string }
+	| { type: "room_joined"; roomCode: string; playerId: string; packetName: string }
 	| { type: "player_list"; players: PlayerInfo[] }
 	| { type: "phase_change"; phase: GamePhase }
 	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string; audioUrl?: string }
@@ -122,6 +123,33 @@ type Action =
 	| { type: "player_reconnected"; playerId: string; playerName: string }
 	| { type: "tts_progress"; current: number; total: number; etaMs?: number }
 	| { type: "answer_typing"; playerName: string; text: string }
+	| {
+		type: "game_sync";
+		tossup: {
+			questionNumber: number;
+			totalQuestions: number;
+			category: string;
+			subcategory: string;
+			words: string[];
+			isPowerZone: boolean;
+			currentBuzzes: { playerName: string; buzzWordIndex: number; correct: boolean; points: number; answer: string }[];
+		} | null;
+		bonus: {
+			leadin: string;
+			controllingPlayerName: string;
+			controllingTeam?: Team;
+			category: string;
+			subcategory: string;
+			words: string[];
+			currentPart: { partNumber: number; value: number } | null;
+			partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText: string }[];
+			totalPoints: number | null;
+		} | null;
+		buzzedPlayer: { id: string; name: string } | null;
+		awaitAnswer: { playerId: string; playerName: string; timeMs: number } | null;
+		awaitBonusAnswer: { controllingPlayerId: string; timeMs: number } | null;
+		neggedPlayerIds: string[];
+	}
 	| { type: "clear_error" }
 	| { type: "clear_result" };
 
@@ -129,6 +157,7 @@ const initialState: GameState = {
 	connected: false,
 	roomCode: null,
 	playerId: null,
+	packetName: null,
 	phase: "lobby",
 	players: [],
 	tossup: null,
@@ -154,9 +183,9 @@ function reducer(state: GameState, action: Action): GameState {
 		case "disconnected":
 			return { ...state, connected: false };
 		case "room_created":
-			return { ...state, roomCode: action.roomCode, playerId: action.playerId };
+			return { ...state, roomCode: action.roomCode, playerId: action.playerId, packetName: action.packetName };
 		case "room_joined":
-			return { ...state, roomCode: action.roomCode, playerId: action.playerId };
+			return { ...state, roomCode: action.roomCode, playerId: action.playerId, packetName: action.packetName };
 		case "player_list":
 			return { ...state, players: action.players };
 		case "phase_change":
@@ -349,6 +378,34 @@ function reducer(state: GameState, action: Action): GameState {
 			return state; // player_list update handles this
 		case "answer_typing":
 			return { ...state, answerTyping: { playerName: action.playerName, text: action.text } };
+		case "game_sync":
+			return {
+				...state,
+				tossup: action.tossup ? {
+					questionNumber: action.tossup.questionNumber,
+					totalQuestions: action.tossup.totalQuestions,
+					category: action.tossup.category,
+					subcategory: action.tossup.subcategory,
+					words: action.tossup.words,
+					currentBuzzes: action.tossup.currentBuzzes,
+					isPowerZone: action.tossup.isPowerZone,
+				} : state.tossup,
+				bonus: action.bonus ? {
+					leadin: action.bonus.leadin,
+					controllingPlayerName: action.bonus.controllingPlayerName,
+					controllingTeam: action.bonus.controllingTeam,
+					category: action.bonus.category,
+					subcategory: action.bonus.subcategory,
+					words: action.bonus.words,
+					currentPart: action.bonus.currentPart,
+					partResults: action.bonus.partResults,
+					totalPoints: action.bonus.totalPoints,
+				} : state.bonus,
+				buzzedPlayer: action.buzzedPlayer,
+				awaitAnswer: action.awaitAnswer,
+				awaitBonusAnswer: action.awaitBonusAnswer,
+				neggedPlayerIds: new Set(action.neggedPlayerIds),
+			};
 		case "clear_error":
 			return { ...state, error: null };
 		case "clear_result":

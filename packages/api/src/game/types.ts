@@ -219,12 +219,14 @@ export interface RoomCreatedEvt {
 	type: "room_created";
 	roomCode: string;
 	playerId: string;
+	packetName: string;
 }
 
 export interface RoomJoinedEvt {
 	type: "room_joined";
 	roomCode: string;
 	playerId: string;
+	packetName: string;
 }
 
 export interface PlayerListEvt {
@@ -368,6 +370,34 @@ export interface AnswerTypingEvt {
 	text: string;
 }
 
+export interface GameSyncEvt {
+	type: "game_sync";
+	tossup: {
+		questionNumber: number;
+		totalQuestions: number;
+		category: string;
+		subcategory: string;
+		words: string[];
+		isPowerZone: boolean;
+		currentBuzzes: { playerName: string; buzzWordIndex: number; correct: boolean; points: number; answer: string }[];
+	} | null;
+	bonus: {
+		leadin: string;
+		controllingPlayerName: string;
+		controllingTeam?: Team;
+		category: string;
+		subcategory: string;
+		words: string[];
+		currentPart: { partNumber: number; value: number } | null;
+		partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText: string }[];
+		totalPoints: number | null;
+	} | null;
+	buzzedPlayer: { id: string; name: string } | null;
+	awaitAnswer: { playerId: string; playerName: string; timeMs: number } | null;
+	awaitBonusAnswer: { controllingPlayerId: string; timeMs: number } | null;
+	neggedPlayerIds: string[];
+}
+
 export type ServerMessage =
 	| RoomCreatedEvt
 	| RoomJoinedEvt
@@ -391,4 +421,5 @@ export type ServerMessage =
 	| PlayerDisconnectedEvt
 	| PlayerReconnectedEvt
 	| TtsProgressEvt
-	| AnswerTypingEvt;
+	| AnswerTypingEvt
+	| GameSyncEvt;
