@@ -136,8 +136,6 @@ export function joinRoom(
 ): { room: GameRoom; playerId: string } {
 	const room = activeRooms.get(roomCode);
 	if (!room) throw new Error("Room not found");
-	if (room.phase !== "lobby") throw new Error("Game already in progress");
-
 	const playerId = generatePlayerId();
 	const player: Player = {
 		id: playerId,

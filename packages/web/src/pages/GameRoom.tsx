@@ -53,6 +53,7 @@ export function GameRoom() {
 		updateSettings,
 		sendAudioReady,
 		cancelTts,
+		sendTyping,
 		disconnect,
 	} = useGameRoom();
 
@@ -134,9 +135,9 @@ export function GameRoom() {
 	const handleKeyDown = useCallback(
 		(e: KeyboardEvent) => {
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-			if (e.code === "Space" && (state.phase === "reading_tossup" || canBuzzBonus)) {
+			if (e.code === "Space" && state.phase !== "lobby") {
 				e.preventDefault();
-				buzz();
+				if (state.phase === "reading_tossup" || canBuzzBonus) buzz();
 			}
 			if (e.key === "n" && state.phase === "between_questions") {
 				e.preventDefault();
@@ -270,12 +271,15 @@ export function GameRoom() {
 
 					{state.phase === "awaiting_answer" && isMyBuzz && state.awaitAnswer && (
 						<div className="mt-2">
-							<AnswerInput onSubmit={submitAnswer} timeMs={state.awaitAnswer.timeMs} />
+							<AnswerInput onSubmit={submitAnswer} onTyping={sendTyping} timeMs={state.awaitAnswer.timeMs} />
 						</div>
 					)}
 
 					{state.phase === "awaiting_answer" && !isMyBuzz && state.awaitAnswer && (
-						<div className="mt-2 text-xs text-gray-500">waiting for {state.awaitAnswer.playerName} to answer...</div>
+						<div className="mt-2 text-xs text-gray-500">
+							waiting for {state.awaitAnswer.playerName} to answer...
+							{state.answerTyping && <span className="ml-2 font-mono">"{state.answerTyping.text}"</span>}
+						</div>
 					)}
 
 					{state.phase === "judging" && !state.bonus && (
@@ -311,11 +315,14 @@ export function GameRoom() {
 					)}
 
 					{state.phase === "bonus_answering" && canAnswerBonus && state.awaitBonusAnswer && (
-						<AnswerInput onSubmit={submitBonusAnswer} timeMs={state.awaitBonusAnswer.timeMs} label="bonus answer" />
+						<AnswerInput onSubmit={submitBonusAnswer} onTyping={sendTyping} timeMs={state.awaitBonusAnswer.timeMs} label="bonus answer" />
 					)}
 
 					{state.phase === "bonus_answering" && !canAnswerBonus && (
-						<div className="text-xs text-gray-500 mt-2">waiting for answer...</div>
+						<div className="text-xs text-gray-500 mt-2">
+							waiting for answer...
+							{state.answerTyping && <span className="ml-2 font-mono">"{state.answerTyping.text}"</span>}
+						</div>
 					)}
 
 					{state.phase === "judging" && state.bonus != null && (

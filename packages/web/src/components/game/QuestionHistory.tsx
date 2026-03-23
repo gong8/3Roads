@@ -3,7 +3,7 @@ import type { HistoryEntry } from "../../hooks/useGameRoom";
 
 function renderTossupText(text: string, buzzes: NonNullable<HistoryEntry["buzzes"]>) {
 	const words = text.split(" ");
-	
+
 	let powerWordIndex = -1;
 	for (let i = 0; i < words.length; i++) {
 		if (words[i].includes("(*)")) {
@@ -23,7 +23,7 @@ function renderTossupText(text: string, buzzes: NonNullable<HistoryEntry["buzzes
 			);
 		}
 		if (i > 0) elements.push(" ");
-		
+
 		const isPower = powerWordIndex !== -1 && i <= powerWordIndex;
 		elements.push(
 			<span key={i} className={isPower ? "font-bold" : ""}>
@@ -43,8 +43,32 @@ function renderTossupText(text: string, buzzes: NonNullable<HistoryEntry["buzzes
 	return <div className="text-gray-800 leading-relaxed mb-1">{elements}</div>;
 }
 
+interface QuestionGroup {
+	questionNumber: number;
+	tossup?: HistoryEntry;
+	bonus?: HistoryEntry;
+}
+
 export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 	const [expanded, setExpanded] = useState(true);
+
+	const groups = useMemo(() => {
+		const map = new Map<number, QuestionGroup>();
+		for (const entry of history) {
+			const existing = map.get(entry.questionNumber);
+			if (existing) {
+				if (entry.type === "tossup") existing.tossup = entry;
+				else existing.bonus = entry;
+			} else {
+				map.set(entry.questionNumber, {
+					questionNumber: entry.questionNumber,
+					tossup: entry.type === "tossup" ? entry : undefined,
+					bonus: entry.type === "bonus" ? entry : undefined,
+				});
+			}
+		}
+		return [...map.values()].reverse();
+	}, [history]);
 
 	if (history.length === 0) return null;
 
@@ -56,36 +80,39 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 				className="text-xs text-gray-500 hover:text-black flex items-center gap-1"
 			>
 				<span className="inline-block transition-transform" style={{ transform: expanded ? "rotate(90deg)" : "rotate(0deg)" }}>▶</span>
-				history ({history.length})
+				history ({groups.length})
 			</button>
 
 			{expanded && (
 				<div className="mt-2 space-y-2">
-					{[...history].reverse().map((entry, i) => (
-						<div key={history.length - 1 - i} className="text-xs border border-gray-100 p-2">
+					{groups.map((group) => (
+						<div key={group.questionNumber} className="text-xs border border-gray-100 p-2">
 							<div className="flex justify-between items-baseline mb-1 border-b border-gray-100 pb-1">
 								<span className="text-gray-400">
-									Q{entry.questionNumber} · {entry.type === "tossup" ? "TU" : "B"} · {entry.category}
-									{entry.subcategory !== entry.category && ` / ${entry.subcategory}`}
+									Q{group.questionNumber} · {group.tossup?.category ?? group.bonus?.category}
+									{(group.tossup?.subcategory ?? group.bonus?.subcategory) !== (group.tossup?.category ?? group.bonus?.category) &&
+										` / ${group.tossup?.subcategory ?? group.bonus?.subcategory}`}
 								</span>
-								{entry.type === "tossup" && entry.dead && (
-									<span className="text-gray-400">dead</span>
-								)}
-								{entry.type === "bonus" && (
-									<span className="text-gray-600">{entry.totalBonusPoints}/30</span>
-								)}
+								<div className="flex gap-2">
+									{group.tossup?.dead && (
+										<span className="text-gray-400">dead</span>
+									)}
+									{group.bonus && (
+										<span className="text-gray-600">{group.bonus.totalBonusPoints}/30</span>
+									)}
+								</div>
 							</div>
 
-							{entry.type === "tossup" && (
+							{group.tossup && (
 								<>
-									{entry.questionText && renderTossupText(entry.questionText, entry.buzzes || [])}
+									{group.tossup.questionText && renderTossupText(group.tossup.questionText, group.tossup.buzzes || [])}
 									<div>
 										<span className="text-gray-400">answer: </span>
-										<span className="font-bold">{entry.answer}</span>
+										<span className="font-bold">{group.tossup.answer}</span>
 									</div>
-									{entry.buzzes && entry.buzzes.length > 0 && (
+									{group.tossup.buzzes && group.tossup.buzzes.length > 0 && (
 										<div className="mt-1 space-y-0.5">
-											{entry.buzzes.map((b, i) => (
+											{group.tossup.buzzes.map((b, i) => (
 												<div key={i} className="text-gray-500 text-xs">
 													{b.playerName} answered "{b.answer}" <span className={b.correct ? "text-green-700" : "text-red-700"}>{b.correct ? `(+${b.points})` : `(${b.points})`}</span>
 												</div>
@@ -95,12 +122,12 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 								</>
 							)}
 
-							{entry.type === "bonus" && entry.partResults && (
-								<div className="space-y-1">
-									{entry.controllingPlayer && (
-										<div className="text-gray-400 mb-1">{entry.controllingPlayer}'s bonus</div>
+							{group.bonus && group.bonus.partResults && (
+								<div className={`space-y-1 ${group.tossup ? "mt-2 pt-2 border-t border-gray-100" : ""}`}>
+									{group.bonus.controllingPlayer && (
+										<div className="text-gray-400 mb-1">{group.bonus.controllingPlayer}'s bonus</div>
 									)}
-									{entry.partResults.map((pr) => (
+									{group.bonus.partResults.map((pr) => (
 										<div key={pr.partNumber} className="flex flex-col gap-0.5 border-l-2 border-gray-200 pl-2">
 											{pr.partText && <div className="text-gray-800 leading-relaxed mb-0.5">{pr.partText}</div>}
 											<div className="flex gap-2 text-[11px]">

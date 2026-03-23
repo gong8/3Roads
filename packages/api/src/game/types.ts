@@ -189,6 +189,11 @@ export interface ResumeMsg {
 	type: "resume";
 }
 
+export interface AnswerTypingMsg {
+	type: "answer_typing";
+	text: string;
+}
+
 export type ClientMessage =
 	| CreateRoomMsg
 	| JoinRoomMsg
@@ -205,7 +210,8 @@ export type ClientMessage =
 	| AudioReadyMsg
 	| CancelTtsMsg
 	| PauseMsg
-	| ResumeMsg;
+	| ResumeMsg
+	| AnswerTypingMsg;
 
 // -- Server -> Client messages --
 
@@ -356,6 +362,12 @@ export interface TtsProgressEvt {
 	etaMs?: number;
 }
 
+export interface AnswerTypingEvt {
+	type: "answer_typing";
+	playerName: string;
+	text: string;
+}
+
 export type ServerMessage =
 	| RoomCreatedEvt
 	| RoomJoinedEvt
@@ -378,4 +390,5 @@ export type ServerMessage =
 	| PlayerKickedEvt
 	| PlayerDisconnectedEvt
 	| PlayerReconnectedEvt
-	| TtsProgressEvt;
+	| TtsProgressEvt
+	| AnswerTypingEvt;

@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 
 interface Props {
 	onSubmit: (answer: string) => void;
+	onTyping?: (text: string) => void;
 	timeMs: number;
 	label?: string;
 	disabled?: boolean;
 }
 
-export function AnswerInput({ onSubmit, timeMs, label = "your answer", disabled = false }: Props) {
+export function AnswerInput({ onSubmit, onTyping, timeMs, label = "your answer", disabled = false }: Props) {
 	const [value, setValue] = useState("");
 	const [remaining, setRemaining] = useState(timeMs);
 	const inputRef = useRef<HTMLInputElement>(null);
@@ -50,7 +51,10 @@ export function AnswerInput({ onSubmit, timeMs, label = "your answer", disabled 
 					ref={inputRef}
 					type="text"
 					value={value}
-					onChange={(e) => setValue(e.target.value)}
+					onChange={(e) => {
+						setValue(e.target.value);
+						onTyping?.(e.target.value);
+					}}
 					onKeyDown={(e) => {
 						if (e.key === "Enter") handleSubmit();
 					}}

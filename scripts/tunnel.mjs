@@ -8,6 +8,7 @@ const ROOT = path.resolve(__dirname, "..");
 const WEB_DIST = path.join(ROOT, "packages/web/dist");
 const API_DIR = path.join(ROOT, "packages/api");
 
+const MCP_DIR = path.join(ROOT, "packages/mcp");
 const TUNNEL_NAME = "3roads";
 const HOSTNAME = "3roads.nelsongong.com";
 
@@ -26,6 +27,14 @@ execFileSync("pnpm", ["turbo", "build", "--filter=@3roads/web"], {
 	stdio: "inherit",
 });
 
+// Start MCP server
+console.log("\n  Starting MCP server...\n");
+const mcp = spawn("npx", ["tsx", "src/index.ts"], {
+	cwd: MCP_DIR,
+	env: { ...process.env },
+	stdio: "inherit",
+});
+
 // Start API server with static file serving
 console.log("\n  Starting server...\n");
 const api = spawn("npx", ["tsx", "src/index.ts"], {
@@ -40,17 +49,20 @@ await new Promise((r) => setTimeout(r, 2000));
 console.log(`\n  Starting tunnel → https://${HOSTNAME}\n`);
 const tunnel = spawn(
 	"cloudflared",
-	["tunnel", "run", "--url", "http://localhost:7001", TUNNEL_NAME],
+	["tunnel", "--config", path.join(process.env.HOME, ".cloudflared/config-3roads.yml"), "run", TUNNEL_NAME],
 	{ stdio: "inherit" },
 );
 
-const cleanup = () => {
+const cleanup = (source) => {
+	console.log(`\n  [cleanup] triggered by: ${source}`);
 	tunnel.kill();
 	api.kill();
+	mcp.kill();
 	process.exit();
 };
 
-process.on("SIGINT", cleanup);
-process.on("SIGTERM", cleanup);
-api.on("exit", cleanup);
-tunnel.on("exit", cleanup);
+mcp.on("exit", (code) => console.log(`  [exit] MCP exited with code ${code}`));
+process.on("SIGINT", () => cleanup("SIGINT"));
+process.on("SIGTERM", () => cleanup("SIGTERM"));
+api.on("exit", (code) => cleanup(`API exit (code ${code})`));
+tunnel.on("exit", (code) => cleanup(`tunnel exit (code ${code})`));

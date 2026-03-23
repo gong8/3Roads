@@ -102,6 +102,9 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 		case "submit_bonus_answer":
 			await handleSubmitBonusAnswer(ws, msg.answer);
 			break;
+		case "answer_typing":
+			handleAnswerTyping(ws, msg.text);
+			break;
 		case "next_question":
 			handleNextQuestion(ws);
 			break;
@@ -180,6 +183,10 @@ async function handleJoinRoom(
 	wsContext.set(ws, { roomCode, playerId });
 	sendRaw(ws, { type: "room_joined", roomCode, playerId });
 	broadcastPlayerList(room);
+	// Send current phase so mid-game joiners can catch up
+	if (room.phase !== "lobby") {
+		sendRaw(ws, { type: "phase_change", phase: room.phase });
+	}
 }
 
 function getContext(ws: WebSocket): { room: GameRoom; playerId: string } | null {
@@ -242,6 +249,14 @@ function handleBuzzMsg(ws: WebSocket): void {
 	} else {
 		handleBuzz(ctx.room, ctx.playerId);
 	}
+}
+
+function handleAnswerTyping(ws: WebSocket, text: string): void {
+	const ctx = getContext(ws);
+	if (!ctx) return;
+	const player = ctx.room.players.get(ctx.playerId);
+	if (!player) return;
+	broadcast(ctx.room, { type: "answer_typing", playerName: player.name, text });
 }
 
 async function handleSubmitAnswer(ws: WebSocket, answer: string): Promise<void> {

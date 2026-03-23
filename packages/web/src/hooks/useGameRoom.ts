@@ -93,6 +93,7 @@ export interface GameState {
 	neggedPlayerIds: Set<string>;
 	ttsProgress: { current: number; total: number; etaMs?: number } | null;
 	history: HistoryEntry[];
+	answerTyping: { playerName: string; text: string } | null;
 }
 
 type Action =
@@ -120,6 +121,7 @@ type Action =
 	| { type: "player_disconnected"; playerId: string; playerName: string }
 	| { type: "player_reconnected"; playerId: string; playerName: string }
 	| { type: "tts_progress"; current: number; total: number; etaMs?: number }
+	| { type: "answer_typing"; playerName: string; text: string }
 	| { type: "clear_error" }
 	| { type: "clear_result" };
 
@@ -142,6 +144,7 @@ const initialState: GameState = {
 	neggedPlayerIds: new Set(),
 	ttsProgress: null,
 	history: [],
+	answerTyping: null,
 };
 
 function reducer(state: GameState, action: Action): GameState {
@@ -184,6 +187,7 @@ function reducer(state: GameState, action: Action): GameState {
 				deadAnswer: null,
 				bonus: null,
 				neggedPlayerIds: new Set(),
+				error: null,
 				// Reset history on first question of a new game
 				...(action.questionNumber === 1 ? { history: [] } : {}),
 			};
@@ -236,6 +240,7 @@ function reducer(state: GameState, action: Action): GameState {
 					points: action.points,
 				},
 				buzzedPlayer: null,
+				answerTyping: null,
 			};
 		}
 		case "tossup_dead":
@@ -295,6 +300,7 @@ function reducer(state: GameState, action: Action): GameState {
 			if (!state.bonus) return state;
 			return {
 				...state,
+				answerTyping: null,
 				bonus: {
 					...state.bonus,
 					currentPart: null,
@@ -341,6 +347,8 @@ function reducer(state: GameState, action: Action): GameState {
 		case "player_disconnected":
 		case "player_reconnected":
 			return state; // player_list update handles this
+		case "answer_typing":
+			return { ...state, answerTyping: { playerName: action.playerName, text: action.text } };
 		case "clear_error":
 			return { ...state, error: null };
 		case "clear_result":
@@ -422,6 +430,7 @@ export function useGameRoom() {
 	const updateSettings = useCallback((settings: { strictness?: number; msPerWord?: number }) => send({ type: "update_settings", ...settings }), [send]);
 	const sendAudioReady = useCallback(() => send({ type: "audio_ready" }), [send]);
 	const cancelTts = useCallback(() => send({ type: "cancel_tts" }), [send]);
+	const sendTyping = useCallback((text: string) => send({ type: "answer_typing", text }), [send]);
 	const clearError = useCallback(() => dispatch({ type: "clear_error" }), []);
 	const disconnect = useCallback(() => {
 		socketRef.current?.close();
@@ -446,6 +455,7 @@ export function useGameRoom() {
 		updateSettings,
 		sendAudioReady,
 		cancelTts,
+		sendTyping,
 		clearError,
 		disconnect,
 	};

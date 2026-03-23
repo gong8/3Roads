@@ -186,11 +186,11 @@ export async function judgeAnswer(
 	}
 
 	// Fast path: try local matching first
+	// Local judge can only confirm correct answers — if it says "incorrect", defer to LLM
 	const localVerdict = localJudge(submittedAnswer, canonicalAnswer, strictness);
-	if (localVerdict !== "unsure") {
-		const correct = localVerdict === "correct";
-		log.info(`judge [local] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${localVerdict}`);
-		return { correct };
+	if (localVerdict === "correct") {
+		log.info(`judge [local] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=correct`);
+		return { correct: true };
 	}
 
 	// Slow path: fall back to LLM for ambiguous cases

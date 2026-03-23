@@ -10,41 +10,40 @@ import { tossupTools } from "./tools/tossups.js";
 const log = createLogger("mcp");
 const MCP_PORT = Number(process.env.MCP_PORT) || 7002;
 
-const server = new McpServer({
-  name: "3roads",
-  version: "0.0.1",
-});
-
 type ToolDef = {
   description: string;
   parameters: { shape: Record<string, unknown> };
   execute: (params: never) => Promise<unknown>;
 };
 
-function registerTools(tools: Record<string, ToolDef>) {
-  for (const [name, tool] of Object.entries(tools)) {
-    server.tool(name, tool.description, tool.parameters.shape, async (params) => {
-      log.info(`tool called: ${name}`, params);
-      try {
-        const result = await tool.execute(params as never);
-        const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-        log.info(`tool completed: ${name}`);
-        return { content: [{ type: "text" as const, text }] };
-      } catch (error) {
-        log.error(`tool failed: ${name}`, error);
-        return {
-          content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }],
-          isError: true,
-        };
-      }
-    });
-  }
-}
+function createMcpServer(): McpServer {
+  const server = new McpServer({
+    name: "3roads",
+    version: "0.0.1",
+  });
 
-registerTools(tossupTools);
-registerTools(bonusTools);
-registerTools(setTools);
-registerTools(searchTools);
+  for (const tools of [tossupTools, bonusTools, setTools, searchTools]) {
+    for (const [name, tool] of Object.entries(tools as Record<string, ToolDef>)) {
+      server.tool(name, tool.description, tool.parameters.shape, async (params) => {
+        log.info(`tool called: ${name}`, params);
+        try {
+          const result = await tool.execute(params as never);
+          const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
+          log.info(`tool completed: ${name}`);
+          return { content: [{ type: "text" as const, text }] };
+        } catch (error) {
+          log.error(`tool failed: ${name}`, error);
+          return {
+            content: [{ type: "text" as const, text: `Error: ${(error as Error).message}` }],
+            isError: true,
+          };
+        }
+      });
+    }
+  }
+
+  return server;
+}
 
 const httpServer = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://localhost:${MCP_PORT}`);
@@ -52,12 +51,11 @@ const httpServer = createServer(async (req, res) => {
 
   if (url.pathname === "/mcp") {
     try {
-      await server.close();
+      const server = createMcpServer();
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
       });
       await server.connect(transport);
-      log.debug("MCP transport connected");
       await transport.handleRequest(req, res);
     } catch (err) {
       log.error("MCP transport/request failed", err);
