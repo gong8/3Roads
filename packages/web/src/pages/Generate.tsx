@@ -19,7 +19,7 @@ export function Generate() {
   const tossupCount = Math.min(20, Math.max(1, parseInt(tossupCountStr, 10) || 1));
   const [includeBonuses, setIncludeBonuses] = useState(true);
   const [difficulty, setDifficulty] = useState("Regular High School");
-  const [model, setModel] = useState("haiku");
+  const [model, setModel] = useState("opus");
   const {
     isGenerating, error, setId, status,
     tossupCount: savedTossups, bonusCount: savedBonuses,
@@ -88,8 +88,9 @@ export function Generate() {
             className="border border-black px-2 py-1 font-mono"
             disabled={isGenerating}
           >
-            <option value="haiku">Claude 3.5 Haiku (Lower Quality, 10x Cheaper)</option>
-            <option value="sonnet">Claude 3.5 Sonnet (Premium Quality)</option>
+            <option value="haiku">Claude Haiku 4.5 (Fast, Cheaper)</option>
+            <option value="sonnet">Claude Sonnet 4.6 (Balanced)</option>
+            <option value="opus">Claude Opus 4.6 (Best Quality)</option>
           </select>
         </div>
         <div className="mb-3">

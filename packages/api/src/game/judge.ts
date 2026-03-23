@@ -221,7 +221,7 @@ export async function judgeAnswer(
 // -- LLM backends --
 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_JUDGE_MODEL || "claude-3-5-haiku-20241022";
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_JUDGE_MODEL || "claude-haiku-4-5-20251001";
 
 if (ANTHROPIC_API_KEY) {
 	log.info(`Judge LLM backend: direct API (model=${ANTHROPIC_MODEL})`);

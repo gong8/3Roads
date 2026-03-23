@@ -10,7 +10,7 @@ const log = createLogger("api:cli");
 
 const BASE_TEMP_DIR = join(tmpdir(), "3roads-cli");
 const MCP_URL = process.env.MCP_URL || "http://127.0.0.1:7002/mcp";
-const LLM_MODEL = process.env.LLM_MODEL || "sonnet";
+const LLM_MODEL = process.env.LLM_MODEL || "haiku";
 
 const SYSTEM_PROMPT_SUFFIX = [
 	"",
