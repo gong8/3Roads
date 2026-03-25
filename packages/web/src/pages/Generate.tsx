@@ -17,6 +17,8 @@ export function Generate() {
   const [theme, setTheme] = useState("");
   const [tossupCountStr, setTossupCountStr] = useState("5");
   const tossupCount = Math.min(20, Math.max(1, parseInt(tossupCountStr, 10) || 1));
+  const [pictureCountStr, setPictureCountStr] = useState("0");
+  const pictureCount = Math.min(tossupCount, Math.max(0, parseInt(pictureCountStr, 10) || 0));
   const [includeBonuses, setIncludeBonuses] = useState(true);
   const [difficulty, setDifficulty] = useState("Regular High School");
   const [model, setModel] = useState("opus");
@@ -30,7 +32,7 @@ export function Generate() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!theme.trim()) return;
-    generate(theme.trim(), tossupCount, includeBonuses ? tossupCount : 0, difficulty, model);
+    generate(theme.trim(), tossupCount, includeBonuses ? tossupCount : 0, difficulty, model, pictureCount);
   };
 
   const totalTarget = targetTossups + targetBonuses;
@@ -102,6 +104,22 @@ export function Generate() {
             onBlur={() => setTossupCountStr(String(tossupCount))}
             min={1}
             max={20}
+            className="border border-black px-2 py-1 w-20 font-mono"
+            disabled={isGenerating}
+          />
+        </div>
+        <div className="mb-3">
+          <label className="block mb-1 text-sm">
+            picture questions{" "}
+            <span className="text-gray-400 font-normal">(wikipedia images, 0–{tossupCount})</span>
+          </label>
+          <input
+            type="number"
+            value={pictureCountStr}
+            onChange={(e) => setPictureCountStr(e.target.value)}
+            onBlur={() => setPictureCountStr(String(pictureCount))}
+            min={0}
+            max={tossupCount}
             className="border border-black px-2 py-1 w-20 font-mono"
             disabled={isGenerating}
           />

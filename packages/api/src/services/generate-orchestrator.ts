@@ -81,15 +81,129 @@ Each bonus has:
 ${SYSTEM_PROMPT_SUFFIX}`;
 }
 
+// -- Wikipedia picture tossup generation --
+
+const WIKI_API = "https://en.wikipedia.org/api/rest_v1/page/summary";
+
+interface WikiSummary {
+	title: string;
+	thumbnail?: { source: string };
+	originalimage?: { source: string };
+	description?: string;
+	extract?: string;
+}
+
+async function fetchWikiImage(title: string): Promise<string | null> {
+	try {
+		const res = await fetch(`${WIKI_API}/${encodeURIComponent(title)}`, {
+			headers: { "User-Agent": "3Roads-QuizBowl/1.0" },
+		});
+		if (!res.ok) return null;
+		const data = await res.json() as WikiSummary;
+		return data.originalimage?.source ?? data.thumbnail?.source ?? null;
+	} catch {
+		return null;
+	}
+}
+
+interface PictureTopic {
+	title: string;
+	hint1: string;
+	hint2: string;
+	category: string;
+	subcategory: string;
+}
+
+async function generatePictureTossups(params: {
+	setId: string;
+	count: number;
+	theme: string;
+	difficulty: string;
+}): Promise<void> {
+	const { setId, count, theme, difficulty } = params;
+	const db = getDb();
+
+	log.info(`[${setId}] Picture generation: requesting ${count} topics for theme="${theme}"`);
+
+	const prompt = `Generate exactly ${count} Wikipedia article titles for picture quiz questions about "${theme}" at "${difficulty}" level.
+
+Requirements:
+- Choose NICHE, non-obvious subjects — avoid the single most famous example of any category
+- Prefer: specific artworks (not just "Mona Lisa"), lesser-known landmarks, specific scientific instruments or specimens, particular historical photographs, regional fauna/flora, specific architectural details, lesser-known cultural artefacts
+- Each title must have a Wikipedia article with an image
+- For each topic write TWO hint sentences in pyramidal style:
+  - Sentence 1 (harder): a specific, expert-level visual or contextual detail visible in or associated with the image that only an expert would know
+  - Sentence 2 (medium): a moderately specific fact about the subject — NOT a giveaway, but something a knowledgeable player could use alongside the image to narrow it down
+
+Output ONLY a JSON array, no markdown. Example:
+[
+  {
+    "title": "Arnolfini Portrait",
+    "hint1": "A convex mirror in the background reflects two additional figures entering the room, one widely believed to be the painter himself, while the Latin inscription above reads 'Jan van Eyck was here 1434'.",
+    "hint2": "This oil painting depicting a Flemish merchant and his elaborately dressed companion is one of the earliest uses of oil paint in the northern European tradition.",
+    "category": "Fine Arts",
+    "subcategory": "Painting"
+  }
+]`;
+
+	let topics: PictureTopic[];
+	try {
+		const raw = await runCliChatSimple({
+			prompt,
+			systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
+			model: "haiku",
+		});
+		const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
+		const parsed = JSON.parse(cleaned) as PictureTopic[];
+		if (!Array.isArray(parsed)) throw new Error("Not an array");
+		topics = parsed.slice(0, count);
+	} catch (err) {
+		log.error(`[${setId}] Picture topic generation failed: ${err instanceof Error ? err.message : err}`);
+		return;
+	}
+
+	log.info(`[${setId}] Fetching Wikipedia images for ${topics.length} topics`);
+
+	const results = await Promise.all(
+		topics.map(async (t) => {
+			const imageUrl = await fetchWikiImage(t.title);
+			return imageUrl ? { ...t, imageUrl } : null;
+		}),
+	);
+
+	const valid = results.filter((r): r is PictureTopic & { imageUrl: string } => r !== null);
+	log.info(`[${setId}] Picture: ${valid.length}/${topics.length} topics have images`);
+
+	if (valid.length === 0) return;
+
+	await db.tossup.createMany({
+		data: valid.map((t) => ({
+			setId,
+			question: `${t.hint1} ${t.hint2}`,
+			answer: t.title,
+			powerMarkIndex: null,
+			imageUrl: t.imageUrl,
+			category: t.category,
+			subcategory: t.subcategory,
+			difficulty,
+		})),
+	});
+
+	log.info(`[${setId}] Saved ${valid.length} picture tossups`);
+}
+
 export async function runGeneration(params: {
 	setId: string;
 	theme: string;
 	difficulty: string;
 	tossupCount: number;
 	bonusCount: number;
+	pictureCount?: number;
 	model?: string;
 }): Promise<void> {
-	const { setId, theme, difficulty, tossupCount, bonusCount, model } = params;
+	const { setId, theme, difficulty, tossupCount, bonusCount, pictureCount = 0, model } = params;
+	// Picture questions are drawn from the tossup budget; written tossups fill the remainder
+	const writtenTossupCount = Math.max(0, tossupCount - pictureCount);
 	const db = getDb();
 
 	try {
@@ -98,71 +212,73 @@ export async function runGeneration(params: {
 			data: { status: "generating" },
 		});
 
-		// Phase 1: Answer Planning
-		log.info(`[${setId}] Phase 1: generating answer plan (${tossupCount} tossups, ${bonusCount} bonuses)`);
+		// Phase 1: Answer Planning (regular tossups + bonuses)
+		log.info(`[${setId}] Phase 1: generating answer plan (${writtenTossupCount} written tossups, ${bonusCount} bonuses, ${pictureCount} picture)`);
 
 		const planPrompt = `Generate a JSON object with two arrays:
-- "tossup_answers": ${tossupCount} unique answer strings for tossups about "${theme}" at ${difficulty} difficulty
+- "tossup_answers": ${writtenTossupCount} unique answer strings for tossups about "${theme}" at ${difficulty} difficulty
 - "bonus_answers": ${bonusCount} unique answer strings for bonuses about "${theme}" at ${difficulty} difficulty
 
 Each answer should be a specific, notable topic suitable for a quiz bowl question at the ${difficulty} level.
 All answers must be distinct across both arrays — no duplicates whatsoever.
 Output ONLY the JSON object, no other text, no markdown fences.`;
 
-		const planResult = await runCliChatSimple({
-			prompt: planPrompt,
-			systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
-			model: "haiku",
-		});
+		const tasks: Promise<unknown>[] = [];
 
-		// Extract JSON from the result (handle possible markdown fences)
-		const jsonMatch = planResult.match(/\{[\s\S]*\}/);
-		if (!jsonMatch) {
-			throw new Error("Answer planning failed: no JSON found in response");
+		if (writtenTossupCount > 0 || bonusCount > 0) {
+			const planResult = await runCliChatSimple({
+				prompt: planPrompt,
+				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
+				model: "haiku",
+			});
+
+			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
+			if (!jsonMatch) throw new Error("Answer planning failed: no JSON found in response");
+
+			const plan = JSON.parse(jsonMatch[0]) as {
+				tossup_answers: string[];
+				bonus_answers: string[];
+			};
+
+			if (!plan.tossup_answers?.length && writtenTossupCount > 0) throw new Error("Answer planning returned no tossup answers");
+			if (!plan.bonus_answers?.length && bonusCount > 0) throw new Error("Answer planning returned no bonus answers");
+
+			log.info(`[${setId}] Phase 1 complete: ${plan.tossup_answers?.length ?? 0} tossup answers, ${plan.bonus_answers?.length ?? 0} bonus answers`);
+
+			// Phase 2: Parallel Question Writing
+			log.info(`[${setId}] Phase 2: writing questions in parallel`);
+
+			if (writtenTossupCount > 0) {
+				const answerList = plan.tossup_answers.slice(0, writtenTossupCount).join("\n- ");
+				const tossupPrompt = `Write ${writtenTossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — refer to the subject only as 'this person', 'this country', 'this work', 'this element', etc. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
+
+				tasks.push(
+					runCliChat({
+						prompt: tossupPrompt,
+						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
+						model: model || "haiku",
+					}),
+				);
+			}
+
+			if (bonusCount > 0) {
+				const answerList = plan.bonus_answers.slice(0, bonusCount).join("\n- ");
+				const bonusPrompt = `Write ${bonusCount} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
+
+				tasks.push(
+					runCliChat({
+						prompt: bonusPrompt,
+						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
+						model: model || "haiku",
+					}),
+				);
+			}
 		}
 
-		const plan = JSON.parse(jsonMatch[0]) as {
-			tossup_answers: string[];
-			bonus_answers: string[];
-		};
-
-		if (!plan.tossup_answers?.length && tossupCount > 0) {
-			throw new Error("Answer planning returned no tossup answers");
-		}
-		if (!plan.bonus_answers?.length && bonusCount > 0) {
-			throw new Error("Answer planning returned no bonus answers");
-		}
-
-		log.info(`[${setId}] Phase 1 complete: ${plan.tossup_answers?.length ?? 0} tossup answers, ${plan.bonus_answers?.length ?? 0} bonus answers`);
-
-		// Phase 2: Parallel Question Writing
-		log.info(`[${setId}] Phase 2: writing questions in parallel`);
-
-		const tasks: Promise<{ ok: boolean; error?: string }>[] = [];
-
-		if (tossupCount > 0) {
-			const answerList = plan.tossup_answers.slice(0, tossupCount).join("\n- ");
-			const tossupPrompt = `Write ${tossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — refer to the subject only as 'this person', 'this country', 'this work', 'this element', etc. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
-
+		// Picture tossups run in parallel with regular generation
+		if (pictureCount > 0) {
 			tasks.push(
-				runCliChat({
-					prompt: tossupPrompt,
-					systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
-					model: model || "haiku",
-				}),
-			);
-		}
-
-		if (bonusCount > 0) {
-			const answerList = plan.bonus_answers.slice(0, bonusCount).join("\n- ");
-			const bonusPrompt = `Write ${bonusCount} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
-
-			tasks.push(
-				runCliChat({
-					prompt: bonusPrompt,
-					systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
-					model: model || "haiku",
-				}),
+				generatePictureTossups({ setId, count: pictureCount, theme, difficulty }),
 			);
 		}
 
@@ -172,31 +288,22 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		for (const r of results) {
 			if (r.status === "rejected") {
 				errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
-			} else if (!r.value.ok) {
-				errors.push(r.value.error || "Unknown CLI error");
+			} else if (r.value && typeof r.value === "object" && "ok" in r.value && !(r.value as { ok: boolean }).ok) {
+				errors.push((r.value as { error?: string }).error || "Unknown CLI error");
 			}
 		}
 
 		if (errors.length > 0) {
 			log.error(`[${setId}] Phase 2 errors: ${errors.join("; ")}`);
-			await db.questionSet.update({
-				where: { id: setId },
-				data: { status: "error" },
-			});
+			await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
 		} else {
 			log.info(`[${setId}] Generation complete`);
-			await db.questionSet.update({
-				where: { id: setId },
-				data: { status: "complete" },
-			});
+			await db.questionSet.update({ where: { id: setId }, data: { status: "complete" } });
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		log.error(`[${setId}] Generation failed: ${msg}`);
-		await db.questionSet.update({
-			where: { id: setId },
-			data: { status: "error" },
-		});
+		await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
 	}
 
 	// Clean up sets that ended up with no questions at all

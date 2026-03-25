@@ -19,6 +19,7 @@ interface PlayerInfo {
 	id: string;
 	name: string;
 	score: number;
+	bonusScore: number;
 	powers: number;
 	tens: number;
 	negs: number;
@@ -35,6 +36,7 @@ interface TossupState {
 	currentBuzzes: { playerName: string; buzzWordIndex: number; correct: boolean; points: number; answer: string }[];
 	isPowerZone: boolean;
 	audioUrl?: string;
+	imageUrl?: string;
 }
 
 interface BonusState {
@@ -47,6 +49,7 @@ interface BonusState {
 	currentPart: { partNumber: number; value: number; audioUrl?: string } | null;
 	partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText?: string }[];
 	totalPoints: number | null;
+	maxPoints: number | null;
 	audioUrl?: string;
 }
 
@@ -72,6 +75,7 @@ export interface HistoryEntry {
 	controllingPlayer?: string;
 	partResults?: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText?: string }[];
 	totalBonusPoints?: number;
+	maxBonusPoints?: number;
 }
 
 export interface GameState {
@@ -104,7 +108,7 @@ type Action =
 	| { type: "room_joined"; roomCode: string; playerId: string; packetName: string }
 	| { type: "player_list"; players: PlayerInfo[] }
 	| { type: "phase_change"; phase: GamePhase }
-	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string; audioUrl?: string }
+	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string; audioUrl?: string; imageUrl?: string }
 	| { type: "word_reveal"; wordIndex: number; word: string; isPowerZone: boolean }
 	| { type: "player_buzzed"; playerId: string; playerName: string }
 	| { type: "answer_result"; playerId: string; playerName: string; answer: string; correct: boolean; points: number; buzzWordIndex: number; words?: string[] }
@@ -113,7 +117,7 @@ type Action =
 	| { type: "bonus_part"; partNumber: number; totalWords: number; value: number; audioUrl?: string }
 	| { type: "bonus_word_reveal"; word: string }
 	| { type: "bonus_part_result"; partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText: string }
-	| { type: "bonus_complete"; totalBonusPoints: number }
+	| { type: "bonus_complete"; totalBonusPoints: number; maxBonusPoints: number }
 	| { type: "game_over"; players: PlayerInfo[] }
 	| { type: "error"; message: string }
 	| { type: "await_answer"; playerId: string; playerName: string; timeMs: number }
@@ -133,6 +137,7 @@ type Action =
 			words: string[];
 			isPowerZone: boolean;
 			currentBuzzes: { playerName: string; buzzWordIndex: number; correct: boolean; points: number; answer: string }[];
+			imageUrl?: string;
 		} | null;
 		bonus: {
 			leadin: string;
@@ -144,6 +149,7 @@ type Action =
 			currentPart: { partNumber: number; value: number } | null;
 			partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText: string }[];
 			totalPoints: number | null;
+			maxBonusPoints: number;
 		} | null;
 		buzzedPlayer: { id: string; name: string } | null;
 		awaitAnswer: { playerId: string; playerName: string; timeMs: number } | null;
@@ -194,7 +200,7 @@ function reducer(state: GameState, action: Action): GameState {
 				phase: action.phase,
 				// Clear transient state on phase transitions
 				...(action.phase === "reading_tossup" ? { awaitAnswer: null, deadAnswer: null, buzzedPlayer: null, awaitBonusAnswer: null } : {}),
-				...(action.phase === "between_questions" ? { awaitAnswer: null, awaitBonusAnswer: null, buzzedPlayer: null } : {}),
+				...(action.phase === "between_questions" ? { awaitAnswer: null, awaitBonusAnswer: null, buzzedPlayer: null, tossup: state.tossup ? { ...state.tossup, imageUrl: undefined } : state.tossup } : {}),
 			};
 		case "tts_progress":
 			return { ...state, ttsProgress: action.current >= action.total ? null : { current: action.current, total: action.total, etaMs: action.etaMs } };
@@ -211,6 +217,7 @@ function reducer(state: GameState, action: Action): GameState {
 					currentBuzzes: [],
 					isPowerZone: true,
 					audioUrl: action.audioUrl,
+					imageUrl: action.imageUrl,
 				},
 				lastResult: null,
 				deadAnswer: null,
@@ -303,6 +310,7 @@ function reducer(state: GameState, action: Action): GameState {
 					currentPart: null,
 					partResults: [],
 					totalPoints: null,
+					maxPoints: null,
 					audioUrl: action.audioUrl,
 				},
 			};
@@ -351,7 +359,7 @@ function reducer(state: GameState, action: Action): GameState {
 			if (!state.bonus) return state;
 			return {
 				...state,
-				bonus: { ...state.bonus, totalPoints: action.totalBonusPoints },
+				bonus: { ...state.bonus, totalPoints: action.totalBonusPoints, maxPoints: action.maxBonusPoints },
 				history: [...state.history, {
 					type: "bonus" as const,
 					questionNumber: state.tossup?.questionNumber ?? 0,
@@ -361,6 +369,7 @@ function reducer(state: GameState, action: Action): GameState {
 					controllingPlayer: state.bonus.controllingPlayerName,
 					partResults: state.bonus.partResults,
 					totalBonusPoints: action.totalBonusPoints,
+					maxBonusPoints: action.maxBonusPoints,
 				}],
 			};
 		case "game_over":
@@ -400,6 +409,7 @@ function reducer(state: GameState, action: Action): GameState {
 					currentPart: action.bonus.currentPart,
 					partResults: action.bonus.partResults,
 					totalPoints: action.bonus.totalPoints,
+					maxPoints: action.bonus.maxBonusPoints,
 				} : state.bonus,
 				buzzedPlayer: action.buzzedPlayer,
 				awaitAnswer: action.awaitAnswer,
@@ -448,14 +458,14 @@ export function useGameRoom() {
 	}, []);
 
 	const createRoom = useCallback(
-		async (questionSetId: string, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, includeBonuses?: boolean, leniency?: number, msPerWord?: number }) => {
+		async (questionSetId: string | undefined, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, includeBonuses?: boolean, leniency?: number, msPerWord?: number, externalPacket?: unknown }) => {
 			connect();
 			try {
 				await socketRef.current?.ready;
 			} catch {
 				return; // disconnect handler already dispatched
 			}
-			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled: options?.ttsEnabled, includeBonuses: options?.includeBonuses, strictness: options?.leniency, msPerWord: options?.msPerWord });
+			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled: options?.ttsEnabled, includeBonuses: options?.includeBonuses, strictness: options?.leniency, msPerWord: options?.msPerWord, externalPacket: options?.externalPacket });
 		},
 		[connect, send],
 	);

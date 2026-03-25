@@ -14,7 +14,10 @@ import { useState } from "react";
 
 interface CreateState {
 	action: "create";
-	questionSetId: string;
+	/** Local DB set — provided for "my sets" source */
+	questionSetId?: string;
+	/** Pre-fetched packet data — provided for "all packets" source */
+	externalPacket?: unknown;
 	playerName: string;
 	mode: "ffa" | "teams";
 	ttsEnabled?: boolean;
@@ -75,7 +78,8 @@ export function GameRoom() {
 				ttsEnabled: locationState.ttsEnabled,
 				includeBonuses: locationState.includeBonuses,
 				leniency: locationState.leniency,
-				msPerWord: locationState.readingSpeed
+				msPerWord: locationState.readingSpeed,
+				externalPacket: locationState.externalPacket,
 			});
 		} else if (locationState.action === "join" && roomCode) {
 			joinRoom(roomCode, locationState.playerName);
@@ -205,12 +209,15 @@ export function GameRoom() {
 			{/* Main Content Column */}
 			<div className="max-w-3xl mx-auto w-full pt-8 px-4">
 				<div className="flex justify-between items-baseline mb-4">
-					{state.phase === "lobby" ? (
-						<div className="text-xs text-gray-500">room: <span className="text-black font-bold">{displayCode}</span></div>
-					) : (
-						<div />
-					)}
-					<div className="text-xs text-gray-500">{state.phase}</div>
+					<div className="text-xs text-gray-500">
+						{state.phase === "lobby"
+							? <>room: <span className="text-black font-bold">{displayCode}</span></>
+							: state.packetName && <span className="text-black">{state.packetName}</span>
+						}
+					</div>
+					<div className="text-xs text-gray-500">
+					{state.phase !== "reading_tossup" && state.phase !== "between_questions" ? state.phase : null}
+				</div>
 				</div>
 
 				{/* Lobby */}
@@ -260,6 +267,7 @@ export function GameRoom() {
 						subcategory={state.tossup.subcategory}
 						questionNumber={state.tossup.questionNumber}
 						totalQuestions={state.tossup.totalQuestions}
+						imageUrl={state.tossup.imageUrl}
 					/>
 
 					{state.phase === "reading_tossup" && (
@@ -309,6 +317,7 @@ export function GameRoom() {
 						currentPart={state.bonus.currentPart}
 						partResults={state.bonus.partResults}
 						totalPoints={state.bonus.totalPoints}
+					maxPoints={state.bonus.maxPoints}
 					/>
 
 					{state.phase === "reading_bonus" && canBuzzBonus && (
@@ -355,7 +364,7 @@ export function GameRoom() {
 							</div>
 						)}
 						{state.bonus?.totalPoints != null && (
-							<div className="mb-2 text-xs text-gray-500">bonus total: {state.bonus.totalPoints}/30</div>
+							<div className="mb-2 text-xs text-gray-500">bonus total: {state.bonus.totalPoints}/{state.bonus.maxPoints ?? 30}</div>
 						)}
 
 						{isLastQuestion ? (

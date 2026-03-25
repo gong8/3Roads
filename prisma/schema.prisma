@@ -29,6 +29,7 @@ model Tossup {
   question       String
   answer         String
   powerMarkIndex Int?
+  imageUrl       String?
   category       String
   subcategory    String
   difficulty     String

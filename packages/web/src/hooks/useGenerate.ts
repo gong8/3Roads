@@ -52,6 +52,7 @@ export function useGenerate() {
     bonusCount: number,
     difficulty: string,
     model: string,
+    pictureCount = 0,
   ) => {
     stopPolling();
 
@@ -71,6 +72,7 @@ export function useGenerate() {
         theme,
         tossupCount,
         bonusCount,
+        pictureCount,
         difficulty,
         model,
       });

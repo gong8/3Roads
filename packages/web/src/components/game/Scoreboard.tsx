@@ -2,6 +2,7 @@ interface PlayerScore {
 	id: string;
 	name: string;
 	score: number;
+	bonusScore: number;
 	powers: number;
 	tens: number;
 	negs: number;
@@ -43,7 +44,9 @@ export function Scoreboard({ players, currentPlayerId, teamMode = false, compact
 				<thead>
 					<tr className="text-left border-b border-black">
 						<th className="py-1">name</th>
-						<th className="py-1 text-right">score</th>
+						<th className="py-1 text-right">total</th>
+						{!compact && <th className="py-1 text-right">tossup</th>}
+						{!compact && <th className="py-1 text-right">bonus</th>}
 						{!compact && <th className="py-1 text-right">15</th>}
 						{!compact && <th className="py-1 text-right">10</th>}
 						{!compact && <th className="py-1 text-right">-5</th>}
@@ -54,6 +57,8 @@ export function Scoreboard({ players, currentPlayerId, teamMode = false, compact
 						<tr key={p.id} className={p.id === currentPlayerId ? "font-bold" : ""}>
 							<td className="py-1">{p.name}{p.isModerator ? " *" : ""}</td>
 							<td className="py-1 text-right">{p.score}</td>
+							{!compact && <td className="py-1 text-right">{p.score - p.bonusScore}</td>}
+							{!compact && <td className="py-1 text-right">{p.bonusScore}</td>}
 							{!compact && <td className="py-1 text-right">{p.powers}</td>}
 							{!compact && <td className="py-1 text-right">{p.tens}</td>}
 							{!compact && <td className="py-1 text-right">{p.negs}</td>}
@@ -75,6 +80,7 @@ function TeamTable({ players, label, currentPlayerId }: { players: PlayerScore[]
 						<tr key={p.id} className={p.id === currentPlayerId ? "font-bold" : ""}>
 							<td className="py-0.5">{p.name}{p.isModerator ? " *" : ""}</td>
 							<td className="py-0.5 text-right">{p.score}</td>
+							<td className="py-0.5 text-right text-gray-500">{p.score - p.bonusScore}T/{p.bonusScore}B</td>
 							<td className="py-0.5 text-right">{p.powers}P</td>
 							<td className="py-0.5 text-right">{p.tens}T</td>
 							<td className="py-0.5 text-right">{p.negs}N</td>

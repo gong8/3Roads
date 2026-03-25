@@ -9,6 +9,8 @@ import { attachGameWebSocket, getActiveRoomsList } from "./game/index.js";
 import { getAudio } from "./game/tts.js";
 import { foldersRoutes } from "./routes/folders.js";
 import { generateRoutes } from "./routes/generate.js";
+import { pictureRoundsRoutes } from "./routes/picture-rounds.js";
+import { qbreaderRoutes } from "./routes/qbreader.js";
 import { questionsRoutes } from "./routes/questions.js";
 import { setsRoutes } from "./routes/sets.js";
 
@@ -33,6 +35,8 @@ app.route("/generate", generateRoutes);
 app.route("/sets", setsRoutes);
 app.route("/folders", foldersRoutes);
 app.route("/questions", questionsRoutes);
+app.route("/qbreader", qbreaderRoutes);
+app.route("/picture-rounds", pictureRoundsRoutes);
 
 // Mount tossup/bonus deletion at root level
 app.delete("/tossups/:id", async (c) => {

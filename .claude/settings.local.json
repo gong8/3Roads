@@ -1,7 +1,20 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "WebFetch(domain:www.qbreader.org)",
+      "Bash(pnpm --filter @3roads/api exec tsc --noEmit)",
+      "Bash(pnpm --filter @3roads/web exec tsc --noEmit)",
+      "Bash(curl -s \"https://www.qbreader.org/api/set-list\")",
+      "Bash(curl -s \"https://www.qbreader.org/api/num-packets?setName=2025%20ACF%20Fall\")",
+      "Bash(curl -s \"https://www.qbreader.org/api/packet?setName=2025%20ACF%20Fall&packetNumber=1\")",
+      "Bash(curl -s \"https://www.qbreader.org/api/query?searchType=question&queryString=silver+atoms&type=tossup\")",
+      "Bash(curl -s \"https://www.qbreader.org/api/query?searchType=question&queryString=sliver+atoms&type=tossup\")",
+      "Bash(grep -rn \"powerMarkIndex\\\\|powerMark\\\\|\\\\\\(\\\\\\\\*\\\\\\)\" \"C:\\\\James\\\\Programming\\\\Javascript\\\\3Roads\\\\packages\\\\api\\\\src\\\\services\")",
+      "Bash(xargs grep:*)",
+      "Bash(npx prisma:*)",
+      "Bash(node -e \":*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

@@ -1,6 +1,6 @@
 import { createLogger, getDb } from "@3roads/shared";
 import type { WebSocket } from "ws";
-import type { BonusData, GameMode, GameRoom, Player, TossupData } from "./types.js";
+import type { BonusData, ExternalPacket, GameMode, GameRoom, Player, TossupData } from "./types.js";
 
 const log = createLogger("api:game:rooms");
 
@@ -29,7 +29,7 @@ function generatePlayerId(): string {
 }
 
 export async function createRoom(
-	questionSetId: string,
+	questionSetId: string | undefined,
 	playerName: string,
 	mode: GameMode,
 	ws: WebSocket,
@@ -37,45 +37,66 @@ export async function createRoom(
 	includeBonuses?: boolean,
 	strictness?: number,
 	msPerWord?: number,
+	externalPacket?: ExternalPacket,
 ): Promise<{ room: GameRoom; playerId: string }> {
-	const db = getDb();
-	const set = await db.questionSet.findUnique({
-		where: { id: questionSetId },
-		include: {
-			tossups: { orderBy: { createdAt: "asc" } },
-			bonuses: {
-				orderBy: { createdAt: "asc" },
-				include: { parts: { orderBy: { partNum: "asc" } } },
+	let tossups: TossupData[];
+	let bonuses: BonusData[];
+	let setName: string;
+	let resolvedSetId: string;
+
+	if (externalPacket) {
+		// Use pre-fetched external packet (e.g. from QB Reader) — no DB lookup needed
+		tossups = externalPacket.tossups;
+		bonuses = includeBonuses === false ? [] : externalPacket.bonuses;
+		setName = externalPacket.name;
+		resolvedSetId = `external:${externalPacket.name}`;
+	} else {
+		if (!questionSetId) throw new Error("questionSetId or externalPacket required");
+		const db = getDb();
+		const set = await db.questionSet.findUnique({
+			where: { id: questionSetId },
+			include: {
+				tossups: { orderBy: { createdAt: "asc" } },
+				bonuses: {
+					orderBy: { createdAt: "asc" },
+					include: { parts: { orderBy: { partNum: "asc" } } },
+				},
 			},
-		},
-	});
+		});
 
-	if (!set) throw new Error("Question set not found");
-	if (set.tossups.length === 0) throw new Error("Question set has no tossups");
+		if (!set) throw new Error("Question set not found");
+		if (set.tossups.length === 0) throw new Error("Question set has no tossups");
 
-	const tossups: TossupData[] = set.tossups.map((t) => ({
-		id: t.id,
-		question: t.question,
-		answer: t.answer,
-		powerMarkIndex: t.powerMarkIndex,
-		category: t.category,
-		subcategory: t.subcategory,
-		difficulty: t.difficulty,
-	}));
+		tossups = set.tossups.map((t) => ({
+			id: t.id,
+			question: t.question,
+			answer: t.answer,
+			powerMarkIndex: t.powerMarkIndex,
+			imageUrl: t.imageUrl ?? undefined,
+			category: t.category,
+			subcategory: t.subcategory,
+			difficulty: t.difficulty,
+		}));
 
-	const bonuses: BonusData[] = (includeBonuses === false ? [] : set.bonuses).map((b) => ({
-		id: b.id,
-		leadin: b.leadin,
-		category: b.category,
-		subcategory: b.subcategory,
-		difficulty: b.difficulty,
-		parts: b.parts.map((p) => ({
-			partNum: p.partNum,
-			text: p.text,
-			answer: p.answer,
-			value: p.value,
-		})),
-	}));
+		bonuses = (includeBonuses === false ? [] : set.bonuses).map((b) => ({
+			id: b.id,
+			leadin: b.leadin,
+			category: b.category,
+			subcategory: b.subcategory,
+			difficulty: b.difficulty,
+			parts: b.parts.map((p) => ({
+				partNum: p.partNum,
+				text: p.text,
+				answer: p.answer,
+				value: p.value,
+			})),
+		}));
+
+		setName = set.name;
+		resolvedSetId = questionSetId;
+	}
+
+	if (tossups.length === 0) throw new Error("Packet has no tossups");
 
 	const code = generateRoomCode();
 	const playerId = generatePlayerId();
@@ -85,6 +106,7 @@ export async function createRoom(
 		name: playerName,
 		ws,
 		score: 0,
+		bonusScore: 0,
 		powers: 0,
 		tens: 0,
 		negs: 0,
@@ -94,8 +116,8 @@ export async function createRoom(
 
 	const room: GameRoom = {
 		code,
-		questionSetId,
-		questionSetName: set.name,
+		questionSetId: resolvedSetId,
+		questionSetName: setName,
 		mode,
 		players: new Map([[playerId, player]]),
 		phase: "lobby",
@@ -124,7 +146,7 @@ export async function createRoom(
 	};
 
 	activeRooms.set(code, room);
-	log.info(`Room ${code} created by "${playerName}" — set="${set.name}" mode=${mode} tossups=${tossups.length} bonuses=${bonuses.length}`);
+	log.info(`Room ${code} created by "${playerName}" — set="${setName}" mode=${mode} tossups=${tossups.length} bonuses=${bonuses.length}`);
 
 	return { room, playerId };
 }
@@ -142,6 +164,7 @@ export function joinRoom(
 		name: playerName,
 		ws,
 		score: 0,
+		bonusScore: 0,
 		powers: 0,
 		tens: 0,
 		negs: 0,

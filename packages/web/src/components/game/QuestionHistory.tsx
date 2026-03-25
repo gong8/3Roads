@@ -98,7 +98,7 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 										<span className="text-gray-400">dead</span>
 									)}
 									{group.bonus && (
-										<span className="text-gray-600">{group.bonus.totalBonusPoints}/30</span>
+										<span className="text-gray-600">{group.bonus.totalBonusPoints}/{group.bonus.maxBonusPoints ?? 30}</span>
 									)}
 								</div>
 							</div>

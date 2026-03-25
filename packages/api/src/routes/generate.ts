@@ -201,6 +201,7 @@ generateRoutes.post("/", async (c) => {
 			theme: string;
 			tossupCount: number;
 			bonusCount: number;
+			pictureCount?: number;
 			difficulty: string;
 			model?: string;
 		}>();
@@ -230,6 +231,7 @@ generateRoutes.post("/", async (c) => {
 			difficulty,
 			tossupCount: body.tossupCount || 0,
 			bonusCount: body.bonusCount || 0,
+			pictureCount: body.pictureCount || 0,
 			model: body.model || "haiku",
 		}).catch((err) => {
 			log.error(`POST /generate — background generation failed for ${set.id}: ${err}`);

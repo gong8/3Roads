@@ -213,6 +213,7 @@ setsRoutes.post("/:setId/tossups/batch", async (c) => {
 				question: string;
 				answer: string;
 				powerMarkIndex?: number;
+				imageUrl?: string;
 				category: string;
 				subcategory: string;
 				difficulty: string;
@@ -232,9 +233,9 @@ setsRoutes.post("/:setId/tossups/batch", async (c) => {
 		}
 
 		for (const t of tossups) {
-			if (!t.question || !t.answer || !t.category || !t.subcategory || !t.difficulty) {
+			if (!t.answer || !t.category || !t.subcategory || !t.difficulty) {
 				log.warn(`POST /sets/${setId}/tossups/batch — missing required fields in tossup`);
-				return c.json({ error: "Each tossup requires question, answer, category, subcategory, and difficulty" }, 400);
+				return c.json({ error: "Each tossup requires answer, category, subcategory, and difficulty" }, 400);
 			}
 		}
 
@@ -245,6 +246,7 @@ setsRoutes.post("/:setId/tossups/batch", async (c) => {
 					question: t.question,
 					answer: t.answer,
 					powerMarkIndex: t.powerMarkIndex ?? null,
+					imageUrl: t.imageUrl ?? null,
 					category: t.category,
 					subcategory: t.subcategory,
 					difficulty: t.difficulty,

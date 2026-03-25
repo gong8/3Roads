@@ -7,17 +7,14 @@ const log = createLogger("api:game:engine");
 
 // -- Word timing helpers --
 
-const MIN_WORD_WEIGHT = 2; // minimum effective character weight (so "a" isn't near-zero)
-const PAUSE_WEIGHT = 1;    // extra weight per word to model inter-word pauses
-
 /**
- * Compute per-word delays proportional to character length.
- * Distributes totalDurationMs across words so longer words get more time.
+ * Compute per-word delays — each word gets the same fixed duration.
+ * totalDurationMs is kept for TTS sync (where audio drives timing), but
+ * for non-TTS reading we just use msPerWord directly per word.
  */
 function computeWordDelays(words: string[], totalDurationMs: number): number[] {
-	const weights = words.map((w) => Math.max(w.length, MIN_WORD_WEIGHT) + PAUSE_WEIGHT);
-	const totalWeight = weights.reduce((sum, w) => sum + w, 0);
-	return weights.map((w) => (w / totalWeight) * totalDurationMs);
+	const perWord = totalDurationMs / words.length;
+	return words.map(() => perWord);
 }
 
 // -- Broadcast helpers --
@@ -52,6 +49,7 @@ export function broadcastPlayerList(room: GameRoom): void {
 			id: p.id,
 			name: p.name,
 			score: p.score,
+			bonusScore: p.bonusScore,
 			powers: p.powers,
 			tens: p.tens,
 			negs: p.negs,
@@ -79,6 +77,7 @@ export function buildGameSync(room: GameRoom): GameSyncEvt {
 			words: tr.words.slice(0, tr.revealedCount),
 			isPowerZone,
 			currentBuzzes: [],
+			imageUrl: tossupData.imageUrl,
 		};
 	}
 
@@ -127,6 +126,7 @@ export function buildGameSync(room: GameRoom): GameSyncEvt {
 			currentPart,
 			partResults,
 			totalPoints: null,
+			maxBonusPoints: br.parts.reduce((sum, p) => sum + p.value, 0),
 		};
 	}
 
@@ -172,14 +172,15 @@ export function buildGameSync(room: GameRoom): GameSyncEvt {
 // -- Word splitting and power mark --
 
 function charIndexToWordIndex(text: string, charIndex: number): number {
-	const words = text.split(/\s+/);
-	let pos = 0;
-	for (let i = 0; i < words.length; i++) {
-		pos += words[i].length;
-		if (pos >= charIndex) return i;
-		pos++; // space
+	// Walk actual word positions so multi-space separators do not throw off the count.
+	const wordRe = /\S+/g;
+	let match: RegExpExecArray | null;
+	let wordIdx = 0;
+	while ((match = wordRe.exec(text)) !== null) {
+		if (charIndex < match.index + match[0].length) return wordIdx;
+		wordIdx++;
 	}
-	return words.length - 1;
+	return Math.max(0, wordIdx - 1);
 }
 
 // -- Shuffle --
@@ -330,6 +331,7 @@ export async function startTossup(room: GameRoom): Promise<void> {
 		category: tossup.category,
 		subcategory: tossup.subcategory,
 		audioUrl,
+		imageUrl: tossup.imageUrl,
 	});
 
 	const startWordReveals = () => {
@@ -500,9 +502,12 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 	room.lastActivity = Date.now();
 
 	if (correct) {
+		// buzzWordIndex = revealedCount at buzz time (already past the last revealed word).
+		// powerMarkWordIndex is the index of the (*) word. A buzz is a power if it happened
+		// before OR during the (*) reveal window, i.e. buzzWordIndex <= powerMarkWordIndex + 1.
 		const inPowerZone = tr.powerMarkWordIndex != null &&
 			tr.buzzWordIndex != null &&
-			tr.buzzWordIndex <= tr.powerMarkWordIndex;
+			tr.buzzWordIndex <= tr.powerMarkWordIndex + 1;
 		const points = inPowerZone ? 15 : 10;
 
 		player.score += points;
@@ -535,8 +540,14 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 			advanceToNextQuestion(room);
 		}
 	} else {
-		player.score -= 5;
-		player.negs++;
+		// No neg if the question was already fully read when the player buzzed
+		const buzzedAfterFullRead = tr.buzzWordIndex != null && tr.buzzWordIndex >= tr.words.length;
+		const points = buzzedAfterFullRead ? 0 : -5;
+		if (!buzzedAfterFullRead) {
+			player.score -= 5;
+			player.negs++;
+		}
+		const buzzWordIndex = tr.buzzWordIndex ?? tr.revealedCount;
 		tr.incorrectBuzzers.add(playerId);
 		tr.buzzedPlayerId = null;
 		tr.buzzWordIndex = null;
@@ -547,8 +558,8 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 			playerName: player.name,
 			answer,
 			correct: false,
-			points: -5,
-			buzzWordIndex: tr.buzzWordIndex!,
+			points,
+			buzzWordIndex,
 		});
 
 		broadcastPlayerList(room);
@@ -614,6 +625,7 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 		advanceToNextQuestion(room);
 		return;
 	}
+	log.info(`startBonus — bonusIndex=${bonusIndex} id=${bonus.id} parts=${bonus.parts.length}`);
 
 	const controllingPlayer = room.players.get(controllingPlayerId);
 	if (!controllingPlayer) {
@@ -871,10 +883,10 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 		if (room.mode === "teams" && br.controllingTeam) {
 			// In team mode, points go to the buzzer
 			const buzzer = room.players.get(br.controllingPlayerId);
-			if (buzzer) buzzer.score += points;
+			if (buzzer) { buzzer.score += points; buzzer.bonusScore += points; }
 		} else {
 			const player = room.players.get(br.controllingPlayerId);
-			if (player) player.score += points;
+			if (player) { player.score += points; player.bonusScore += points; }
 		}
 	}
 
@@ -908,8 +920,9 @@ function completeBonus(room: GameRoom): void {
 	const totalBonusPoints = br.partScores.reduce((sum, correct, i) => {
 		return sum + (correct ? br.parts[i].value : 0);
 	}, 0);
+	const maxBonusPoints = br.parts.reduce((sum, p) => sum + p.value, 0);
 
-	broadcast(room, { type: "bonus_complete", totalBonusPoints });
+	broadcast(room, { type: "bonus_complete", totalBonusPoints, maxBonusPoints });
 	advanceToNextQuestion(room);
 }
 
@@ -1081,6 +1094,7 @@ export function endGame(room: GameRoom): void {
 			id: p.id,
 			name: p.name,
 			score: p.score,
+			bonusScore: p.bonusScore,
 			powers: p.powers,
 			tens: p.tens,
 			negs: p.negs,

@@ -26,7 +26,7 @@ import {
 	reconnectPlayer,
 	removePlayer,
 } from "./rooms.js";
-import type { ClientMessage, GameRoom, ServerMessage } from "./types.js";
+import type { ClientMessage, ExternalPacket, GameRoom, ServerMessage } from "./types.js";
 
 const log = createLogger("api:game:ws");
 
@@ -86,7 +86,7 @@ function sendRaw(ws: WebSocket, msg: ServerMessage): void {
 async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 	switch (msg.type) {
 		case "create_room":
-			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled, msg.includeBonuses, msg.strictness, msg.msPerWord);
+			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled, msg.includeBonuses, msg.strictness, msg.msPerWord, msg.externalPacket);
 			break;
 		case "join_room":
 			await handleJoinRoom(ws, msg.roomCode, msg.playerName);
@@ -143,15 +143,16 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 
 async function handleCreateRoom(
 	ws: WebSocket,
-	questionSetId: string,
+	questionSetId: string | undefined,
 	playerName: string,
 	mode: "ffa" | "teams",
 	ttsEnabled?: boolean,
 	includeBonuses?: boolean,
 	strictness?: number,
 	msPerWord?: number,
+	externalPacket?: ExternalPacket,
 ): Promise<void> {
-	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, includeBonuses, strictness, msPerWord);
+	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, includeBonuses, strictness, msPerWord, externalPacket);
 	wsContext.set(ws, { roomCode: room.code, playerId });
 	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId, packetName: room.questionSetName });
 	broadcastPlayerList(room);

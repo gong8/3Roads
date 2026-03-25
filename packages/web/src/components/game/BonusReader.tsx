@@ -16,9 +16,10 @@ interface Props {
 	currentPart: { partNumber: number; value: number } | null;
 	partResults: PartResult[];
 	totalPoints: number | null;
+	maxPoints: number | null;
 }
 
-export function BonusReader({ leadin, controllingPlayerName, category, subcategory, words, currentPart, partResults, totalPoints }: Props) {
+export function BonusReader({ leadin, controllingPlayerName, category, subcategory, words, currentPart, partResults, totalPoints, maxPoints }: Props) {
 	return (
 		<div className="border border-black p-3 mb-3">
 			<div className="flex justify-between text-xs text-gray-500 mb-2">
@@ -54,7 +55,7 @@ export function BonusReader({ leadin, controllingPlayerName, category, subcatego
 			)}
 
 			{totalPoints != null && (
-				<div className="mt-2 text-xs text-gray-500">bonus total: {totalPoints}/30</div>
+				<div className="mt-2 text-xs text-gray-500">bonus total: {totalPoints}/{maxPoints ?? 30}</div>
 			)}
 		</div>
 	);

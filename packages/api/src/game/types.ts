@@ -21,6 +21,7 @@ export interface Player {
 	name: string;
 	ws: WebSocket;
 	score: number;
+	bonusScore: number;
 	powers: number;
 	tens: number;
 	negs: number;
@@ -33,6 +34,7 @@ export interface TossupData {
 	question: string;
 	answer: string;
 	powerMarkIndex: number | null;
+	imageUrl?: string;
 	category: string;
 	subcategory: string;
 	difficulty: string;
@@ -109,9 +111,18 @@ export interface GameRoom {
 
 // -- Client -> Server messages --
 
+export interface ExternalPacket {
+	name: string;
+	tossups: TossupData[];
+	bonuses: BonusData[];
+}
+
 export interface CreateRoomMsg {
 	type: "create_room";
-	questionSetId: string;
+	/** Local DB set ID — required unless externalPacket is provided */
+	questionSetId?: string;
+	/** Pre-fetched packet data (e.g. from QB Reader) — skips DB lookup */
+	externalPacket?: ExternalPacket;
 	playerName: string;
 	mode: GameMode;
 	ttsEnabled?: boolean;
@@ -231,7 +242,7 @@ export interface RoomJoinedEvt {
 
 export interface PlayerListEvt {
 	type: "player_list";
-	players: { id: string; name: string; score: number; powers: number; tens: number; negs: number; isModerator: boolean; team?: Team }[];
+	players: { id: string; name: string; score: number; bonusScore: number; powers: number; tens: number; negs: number; isModerator: boolean; team?: Team }[];
 }
 
 export interface PhaseChangeEvt {
@@ -246,6 +257,7 @@ export interface TossupStartEvt {
 	category: string;
 	subcategory: string;
 	audioUrl?: string;
+	imageUrl?: string;
 }
 
 export interface WordRevealEvt {
@@ -314,11 +326,12 @@ export interface BonusPartResultEvt {
 export interface BonusCompleteEvt {
 	type: "bonus_complete";
 	totalBonusPoints: number;
+	maxBonusPoints: number;
 }
 
 export interface GameOverEvt {
 	type: "game_over";
-	players: { id: string; name: string; score: number; powers: number; tens: number; negs: number; team?: Team }[];
+	players: { id: string; name: string; score: number; bonusScore: number; powers: number; tens: number; negs: number; team?: Team }[];
 }
 
 export interface ErrorEvt {
@@ -380,6 +393,7 @@ export interface GameSyncEvt {
 		words: string[];
 		isPowerZone: boolean;
 		currentBuzzes: { playerName: string; buzzWordIndex: number; correct: boolean; points: number; answer: string }[];
+		imageUrl?: string;
 	} | null;
 	bonus: {
 		leadin: string;
@@ -391,6 +405,7 @@ export interface GameSyncEvt {
 		currentPart: { partNumber: number; value: number } | null;
 		partResults: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText: string }[];
 		totalPoints: number | null;
+		maxBonusPoints: number;
 	} | null;
 	buzzedPlayer: { id: string; name: string } | null;
 	awaitAnswer: { playerId: string; playerName: string; timeMs: number } | null;

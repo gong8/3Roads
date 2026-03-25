@@ -67,7 +67,7 @@ function localJudge(
 		const normalizedForm = normalize(form);
 		if (!normalizedForm) continue;
 
-		// Only accept exact normalized matches
+		// Exact normalized match
 		if (normalizedSubmitted === normalizedForm) return "correct";
 
 		// Order-agnostic match for conjunctive answers ("spain and france" == "france and spain")
@@ -76,6 +76,10 @@ function localJudge(
 			const sortParts = (s: string) => s.split(splitPattern).map((p) => p.trim()).filter(Boolean).sort().join(" ");
 			if (sortParts(normalizedSubmitted) === sortParts(normalizedForm)) return "correct";
 		}
+
+		// Surname match: submitted = last word of a multi-word answer (e.g. "atkinson" for "Rowan Atkinson")
+		const formWords = normalizedForm.split(" ");
+		if (formWords.length > 1 && normalizedSubmitted === formWords[formWords.length - 1]) return "correct";
 	}
 
 	// Everything else goes to LLM
@@ -102,14 +106,16 @@ export async function judgeAnswer(
 	}
 
 	// Slow path: fall back to LLM for ambiguous cases
-	log.info(`judge [llm] — local unsure, falling back to LLM for submitted="${submittedAnswer}" canonical="${canonicalAnswer}"`);
+	// Strip bracketed moderator notes (e.g. "[prompt on X]") from canonical before sending to LLM
+	const canonicalForLlm = canonicalAnswer.replace(/\s*\[[^\]]*\]/g, "").trim();
+	log.info(`judge [llm] — local unsure, falling back to LLM for submitted="${submittedAnswer}" canonical="${canonicalForLlm}"`);
 
 	const systemPrompt = "You are a quiz bowl answer judge. Respond with ONLY \"correct\" or \"incorrect\".";
 	const userPrompt = [
-		`The canonical answer is: ${canonicalAnswer}`,
+		`The canonical answer is: ${canonicalForLlm}`,
 		`The player submitted: ${submittedAnswer}`,
 		`The question was: ${questionText.slice(0, 500)}`,
-		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, and adjective/demonym forms (e.g. "Italian" is correct for "Italy", "French" for "France", "American" for "United States").`,
+		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, adjective/demonym forms (e.g. "Italian" for "Italy"), and surnames alone for person answers (e.g. "Atkinson" is correct for "Rowan Atkinson").`,
 	].join("\n");
 
 	try {
