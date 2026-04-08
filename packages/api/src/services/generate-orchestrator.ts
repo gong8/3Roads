@@ -150,6 +150,8 @@ For each topic write TWO hint sentences in pyramidal style:
 - Sentence 1 (harder): a specific contextual or visual detail that a knowledgeable player would recognise but not a casual observer
 - Sentence 2 (medium): a broader fact about the subject that helps confirm an answer — not a direct giveaway, but useful alongside the image
 
+CRITICAL: The hint sentences must NEVER contain the title, the subject's name, or any recognisable variant or abbreviation of it. Refer to the subject only as "this work", "this painting", "this person", "this species", "this building", etc. as appropriate. The answer must not be nameable from the hint text alone.
+
 Output ONLY a JSON array, no markdown. Example:
 [
   {
