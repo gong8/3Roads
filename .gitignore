@@ -8,3 +8,5 @@ data/*.db-shm
 data/models
 .env.local
 .venv
+.env
+settings.local.json

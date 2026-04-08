@@ -123,17 +123,32 @@ async function generatePictureTossups(params: {
 	const { setId, count, theme, difficulty } = params;
 	const db = getDb();
 
-	log.info(`[${setId}] Picture generation: requesting ${count} topics for theme="${theme}"`);
+	const MAX_ATTEMPTS = 3;
+	const collected: (PictureTopic & { imageUrl: string })[] = [];
+	const usedTitles = new Set<string>();
 
-	const prompt = `Generate exactly ${count} Wikipedia article titles for picture quiz questions about "${theme}" at "${difficulty}" level.
+	for (let attempt = 1; attempt <= MAX_ATTEMPTS && collected.length < count; attempt++) {
+		const needed = count - collected.length;
+		log.info(`[${setId}] Picture generation attempt ${attempt}/${MAX_ATTEMPTS}: requesting ${needed} topics`);
 
-Requirements:
-- Choose NICHE, non-obvious subjects — avoid the single most famous example of any category
-- Prefer: specific artworks (not just "Mona Lisa"), lesser-known landmarks, specific scientific instruments or specimens, particular historical photographs, regional fauna/flora, specific architectural details, lesser-known cultural artefacts
-- Each title must have a Wikipedia article with an image
-- For each topic write TWO hint sentences in pyramidal style:
-  - Sentence 1 (harder): a specific, expert-level visual or contextual detail visible in or associated with the image that only an expert would know
-  - Sentence 2 (medium): a moderately specific fact about the subject — NOT a giveaway, but something a knowledgeable player could use alongside the image to narrow it down
+		const excludeClause = usedTitles.size > 0
+			? `\nDo NOT generate topics for any of these already-used titles: ${[...usedTitles].join(", ")}.`
+			: "";
+
+		const prompt = `Generate exactly ${needed} Wikipedia article titles for picture quiz questions that fit the theme "${theme}" at "${difficulty}" difficulty.${excludeClause}
+
+Difficulty calibration for subject selection:
+- Middle School / Easy High School: well-known, recognisable subjects — famous paintings, iconic landmarks, well-known species, major historical figures
+- Regular High School: moderately well-known subjects that a curious student would recognise — notable but not the single most famous example
+- Hard High School / Easy College: less obvious subjects within the theme — specific works, regional examples, notable but not household-name subjects
+- Regular College and above: genuinely challenging — specific lesser-known works, technical specimens, obscure but real subjects
+
+Current difficulty is "${difficulty}" — calibrate subject familiarity accordingly. Subjects must be directly related to the theme "${theme}".
+
+Each title must be a real Wikipedia article that has an image.
+For each topic write TWO hint sentences in pyramidal style:
+- Sentence 1 (harder): a specific contextual or visual detail that a knowledgeable player would recognise but not a casual observer
+- Sentence 2 (medium): a broader fact about the subject that helps confirm an answer — not a direct giveaway, but useful alongside the image
 
 Output ONLY a JSON array, no markdown. Example:
 [
@@ -146,38 +161,43 @@ Output ONLY a JSON array, no markdown. Example:
   }
 ]`;
 
-	let topics: PictureTopic[];
-	try {
-		const raw = await runCliChatSimple({
-			prompt,
-			systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
-			model: "haiku",
-		});
-		const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
-		const parsed = JSON.parse(cleaned) as PictureTopic[];
-		if (!Array.isArray(parsed)) throw new Error("Not an array");
-		topics = parsed.slice(0, count);
-	} catch (err) {
-		log.error(`[${setId}] Picture topic generation failed: ${err instanceof Error ? err.message : err}`);
-		return;
+		let topics: PictureTopic[];
+		try {
+			const raw = await runCliChatSimple({
+				prompt,
+				systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
+				model: "haiku",
+			});
+			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
+			const parsed = JSON.parse(cleaned) as PictureTopic[];
+			if (!Array.isArray(parsed)) throw new Error("Not an array");
+			topics = parsed.slice(0, needed);
+		} catch (err) {
+			log.error(`[${setId}] Picture topic generation failed (attempt ${attempt}): ${err instanceof Error ? err.message : err}`);
+			break;
+		}
+
+		log.info(`[${setId}] Fetching Wikipedia images for ${topics.length} topics`);
+
+		const results = await Promise.all(
+			topics.map(async (t) => {
+				usedTitles.add(t.title);
+				const imageUrl = await fetchWikiImage(t.title);
+				return imageUrl ? { ...t, imageUrl } : null;
+			}),
+		);
+
+		const valid = results.filter((r): r is PictureTopic & { imageUrl: string } => r !== null);
+		log.info(`[${setId}] Picture attempt ${attempt}: ${valid.length}/${topics.length} topics have images`);
+		collected.push(...valid);
 	}
 
-	log.info(`[${setId}] Fetching Wikipedia images for ${topics.length} topics`);
+	log.info(`[${setId}] Picture: collected ${collected.length}/${count} tossups after retries`);
 
-	const results = await Promise.all(
-		topics.map(async (t) => {
-			const imageUrl = await fetchWikiImage(t.title);
-			return imageUrl ? { ...t, imageUrl } : null;
-		}),
-	);
-
-	const valid = results.filter((r): r is PictureTopic & { imageUrl: string } => r !== null);
-	log.info(`[${setId}] Picture: ${valid.length}/${topics.length} topics have images`);
-
-	if (valid.length === 0) return;
+	if (collected.length === 0) return;
 
 	await db.tossup.createMany({
-		data: valid.map((t) => ({
+		data: collected.slice(0, count).map((t) => ({
 			setId,
 			question: `${t.hint1} ${t.hint2}`,
 			answer: t.title,
@@ -189,7 +209,7 @@ Output ONLY a JSON array, no markdown. Example:
 		})),
 	});
 
-	log.info(`[${setId}] Saved ${valid.length} picture tossups`);
+	log.info(`[${setId}] Saved ${Math.min(collected.length, count)} picture tossups`);
 }
 
 export async function runGeneration(params: {

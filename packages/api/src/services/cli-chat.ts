@@ -254,11 +254,10 @@ function createStreamParser(emitSSE: SSEEmitter) {
 
 function spawnCli(args: string[], cwd: string): ChildProcessWithoutNullStreams {
 	log.info(`spawnCli — claude ${args.join(" ")}`);
+	const { ANTHROPIC_API_KEY: _dropped, ...envWithoutApiKey } = process.env;
 	return spawn("claude", args, {
 		cwd,
-		env: {
-			...process.env,
-		},
+		env: envWithoutApiKey,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 }

@@ -99,6 +99,7 @@ export interface GameState {
 	ttsProgress: { current: number; total: number; etaMs?: number } | null;
 	history: HistoryEntry[];
 	answerTyping: { playerName: string; text: string } | null;
+	pictureBuzzWindowEndMs: number | null;
 }
 
 type Action =
@@ -108,6 +109,7 @@ type Action =
 	| { type: "room_joined"; roomCode: string; playerId: string; packetName: string }
 	| { type: "player_list"; players: PlayerInfo[] }
 	| { type: "phase_change"; phase: GamePhase }
+	| { type: "picture_buzz_window"; timeMs: number }
 	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string; audioUrl?: string; imageUrl?: string }
 	| { type: "word_reveal"; wordIndex: number; word: string; isPowerZone: boolean }
 	| { type: "player_buzzed"; playerId: string; playerName: string }
@@ -180,6 +182,7 @@ const initialState: GameState = {
 	ttsProgress: null,
 	history: [],
 	answerTyping: null,
+	pictureBuzzWindowEndMs: null,
 };
 
 function reducer(state: GameState, action: Action): GameState {
@@ -199,9 +202,11 @@ function reducer(state: GameState, action: Action): GameState {
 				...state,
 				phase: action.phase,
 				// Clear transient state on phase transitions
-				...(action.phase === "reading_tossup" ? { awaitAnswer: null, deadAnswer: null, buzzedPlayer: null, awaitBonusAnswer: null } : {}),
-				...(action.phase === "between_questions" ? { awaitAnswer: null, awaitBonusAnswer: null, buzzedPlayer: null, tossup: state.tossup ? { ...state.tossup, imageUrl: undefined } : state.tossup } : {}),
+				...(action.phase === "reading_tossup" ? { awaitAnswer: null, deadAnswer: null, buzzedPlayer: null, awaitBonusAnswer: null, pictureBuzzWindowEndMs: null } : {}),
+				...(action.phase === "between_questions" ? { awaitAnswer: null, awaitBonusAnswer: null, buzzedPlayer: null, pictureBuzzWindowEndMs: null } : {}),
 			};
+		case "picture_buzz_window":
+			return { ...state, pictureBuzzWindowEndMs: Date.now() + action.timeMs };
 		case "tts_progress":
 			return { ...state, ttsProgress: action.current >= action.total ? null : { current: action.current, total: action.total, etaMs: action.etaMs } };
 		case "tossup_start":
@@ -224,6 +229,7 @@ function reducer(state: GameState, action: Action): GameState {
 				bonus: null,
 				neggedPlayerIds: new Set(),
 				error: null,
+				pictureBuzzWindowEndMs: null,
 				// Reset history on first question of a new game
 				...(action.questionNumber === 1 ? { history: [] } : {}),
 			};

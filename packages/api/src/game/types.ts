@@ -60,6 +60,7 @@ export interface TossupReading {
 	buzzedPlayerId: string | null;
 	buzzWordIndex: number | null;
 	incorrectBuzzers: Set<string>;
+	isPicture: boolean;
 }
 
 export interface BonusReading {
@@ -290,6 +291,11 @@ export interface TossupDeadEvt {
 	words: string[];
 }
 
+export interface PictureBuzzWindowEvt {
+	type: "picture_buzz_window";
+	timeMs: number;
+}
+
 export interface BonusStartEvt {
 	type: "bonus_start";
 	leadin: string;
@@ -423,6 +429,7 @@ export type ServerMessage =
 	| PlayerBuzzedEvt
 	| AnswerResultEvt
 	| TossupDeadEvt
+	| PictureBuzzWindowEvt
 	| BonusStartEvt
 	| BonusPartEvt
 	| BonusWordRevealEvt

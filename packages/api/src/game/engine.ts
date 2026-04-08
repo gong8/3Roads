@@ -318,6 +318,7 @@ export async function startTossup(room: GameRoom): Promise<void> {
 		buzzedPlayerId: null,
 		buzzWordIndex: null,
 		incorrectBuzzers: new Set(),
+		isPicture: !!tossup.imageUrl,
 	};
 
 	room.phase = "reading_tossup";
@@ -401,12 +402,15 @@ function revealNextWord(room: GameRoom): void {
 			clearTimeout(tr.intervalHandle);
 			tr.intervalHandle = null;
 		}
-		// Give a short window for buzzing after last word, then dead
+		const deadWindowMs = tr.isPicture ? 5000 : 1000;
+		if (tr.isPicture) {
+			broadcast(room, { type: "picture_buzz_window", timeMs: deadWindowMs });
+		}
 		setTimeout(() => {
 			if (room.phase === "reading_tossup" && room.tossupReading === tr) {
 				tossupDead(room);
 			}
-		}, 1000);
+		}, deadWindowMs);
 		return;
 	}
 
@@ -586,11 +590,15 @@ function resumeTossup(room: GameRoom): void {
 
 	if (tr.revealedCount >= tr.words.length) {
 		// All words already revealed — give brief window, then dead
+		const deadWindowMs = tr.isPicture ? 5000 : 1000;
+		if (tr.isPicture) {
+			broadcast(room, { type: "picture_buzz_window", timeMs: deadWindowMs });
+		}
 		setTimeout(() => {
 			if (room.phase === "reading_tossup" && room.tossupReading === tr) {
 				tossupDead(room);
 			}
-		}, 1000);
+		}, deadWindowMs);
 		return;
 	}
 

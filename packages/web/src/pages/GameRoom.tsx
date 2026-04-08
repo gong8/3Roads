@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useGameAudio } from "../hooks/useGameAudio";
 import { useGameRoom } from "../hooks/useGameRoom";
@@ -10,7 +10,6 @@ import { QuestionHistory } from "../components/game/QuestionHistory";
 import { Scoreboard } from "../components/game/Scoreboard";
 import { TeamAssignment } from "../components/game/TeamAssignment";
 import { TossupReader } from "../components/game/TossupReader";
-import { useState } from "react";
 
 interface CreateState {
 	action: "create";
@@ -167,6 +166,23 @@ export function GameRoom() {
 
 	const [showScoreboard, setShowScoreboard] = useState(true);
 
+	const [pictureBuzzSecondsLeft, setPictureBuzzSecondsLeft] = useState<number | null>(null);
+
+	useEffect(() => {
+		if (!state.pictureBuzzWindowEndMs) {
+			setPictureBuzzSecondsLeft(null);
+			return;
+		}
+		const tick = () => {
+			const left = Math.max(0, state.pictureBuzzWindowEndMs! - Date.now());
+			setPictureBuzzSecondsLeft(Math.ceil(left / 1000));
+			if (left === 0) clearInterval(id);
+		};
+		tick();
+		const id = setInterval(tick, 100);
+		return () => clearInterval(id);
+	}, [state.pictureBuzzWindowEndMs]);
+
 	const displayCode = state.roomCode || roomCode;
 
 	if (!state.connected && !state.playerId) {
@@ -272,6 +288,12 @@ export function GameRoom() {
 
 					{state.phase === "reading_tossup" && (
 						<BuzzButton onBuzz={buzz} disabled={!canBuzz} />
+					)}
+
+					{pictureBuzzSecondsLeft !== null && pictureBuzzSecondsLeft > 0 && (
+						<div className="mt-2 text-center text-sm font-bold text-gray-600">
+							buzz in: {pictureBuzzSecondsLeft}s
+						</div>
 					)}
 
 					{state.buzzedPlayer && (
