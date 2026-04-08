@@ -38,6 +38,8 @@ function parseAcceptableAnswers(canonical: string): string[] {
 function normalize(answer: string): string {
 	return answer
 		.toLowerCase()
+		.normalize("NFD")
+		.replace(/[\u0300-\u036f]/g, "")
 		.trim()
 		.replace(/^(a|an|the)\s+/i, "")
 		.replace(/[^a-z0-9\s]/g, "")

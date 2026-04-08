@@ -113,7 +113,7 @@ type Action =
 	| { type: "tossup_start"; questionNumber: number; totalQuestions: number; category: string; subcategory: string; audioUrl?: string; imageUrl?: string }
 	| { type: "word_reveal"; wordIndex: number; word: string; isPowerZone: boolean }
 	| { type: "player_buzzed"; playerId: string; playerName: string }
-	| { type: "answer_result"; playerId: string; playerName: string; answer: string; correct: boolean; points: number; buzzWordIndex: number; words?: string[] }
+	| { type: "answer_result"; playerId: string; playerName: string; answer: string; correctAnswer?: string; correct: boolean; points: number; buzzWordIndex: number; words?: string[] }
 	| { type: "tossup_dead"; answer: string; words?: string[] }
 	| { type: "bonus_start"; leadin: string; controllingPlayerName: string; controllingTeam?: Team; category: string; subcategory: string; audioUrl?: string }
 	| { type: "bonus_part"; partNumber: number; totalWords: number; value: number; audioUrl?: string }
@@ -264,7 +264,7 @@ function reducer(state: GameState, action: Action): GameState {
 					category: state.tossup.category,
 					subcategory: state.tossup.subcategory,
 					questionText: action.words?.join(" ") ?? state.tossup.words.join(" "),
-					answer: action.answer,
+					answer: action.correctAnswer ?? action.answer,
 					buzzes: currentBuzzes,
 					dead: false,
 				}]

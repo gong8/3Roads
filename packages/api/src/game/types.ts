@@ -279,6 +279,7 @@ export interface AnswerResultEvt {
 	playerId: string;
 	playerName: string;
 	answer: string;
+	correctAnswer?: string;
 	correct: boolean;
 	points: number;
 	buzzWordIndex: number;

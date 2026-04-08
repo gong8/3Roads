@@ -523,6 +523,7 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 			playerId,
 			playerName: player.name,
 			answer,
+			correctAnswer: tr.answer,
 			correct: true,
 			points,
 			buzzWordIndex: tr.buzzWordIndex!,

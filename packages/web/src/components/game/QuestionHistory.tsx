@@ -114,7 +114,8 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 										<div className="mt-1 space-y-0.5">
 											{group.tossup.buzzes.map((b, i) => (
 												<div key={i} className="text-gray-500 text-xs">
-													{b.playerName} answered "{b.answer}" <span className={b.correct ? "text-green-700" : "text-red-700"}>{b.correct ? `(+${b.points})` : `(${b.points})`}</span>
+													<span className="text-gray-400">said: </span>
+													{b.answer} <span className={b.correct ? "text-green-700" : "text-red-700"}>{b.correct ? `(+${b.points})` : `(${b.points})`}</span>
 												</div>
 											))}
 										</div>

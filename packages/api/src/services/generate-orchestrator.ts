@@ -73,6 +73,7 @@ Each bonus has:
 - **Part 2 [10]:** Medium — requires solid knowledge
 - **Part 3 [10]:** Hardest — challenges even strong players
 - Each part must have a DIFFERENT answer from the other parts and from all other questions in the set
+- CRITICAL: No part's answer may appear in or be trivially inferable from the leadin. If the leadin is "This bonus is about Goya's Saturn Devouring His Son," you must NOT ask for Goya or Saturn as part answers — those names are stated in the leadin and would be immediate giveaways. Choose part answers that are substantive facts *about* the leadin subject, not components of its name.
 
 ## WORKFLOW
 1. Write ALL bonuses, then call mcp__3roads__save_bonuses_batch ONCE with setId "${setId}" and the full array.
@@ -245,6 +246,7 @@ export async function runGeneration(params: {
 
 Each answer should be a specific, notable topic suitable for a quiz bowl question at the ${difficulty} level.
 All answers must be distinct across both arrays — no duplicates whatsoever.
+Bonus answers must not be about the same specific subject as any tossup answer. If a tossup is about a painting, the bonus must not be about that same painting, its painter, or its depicted subject. Keep tossup and bonus topics clearly separated.
 Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		const tasks: Promise<unknown>[] = [];
