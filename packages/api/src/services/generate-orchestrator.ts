@@ -100,7 +100,9 @@ async function fetchWikiImage(title: string): Promise<string | null> {
 		});
 		if (!res.ok) return null;
 		const data = await res.json() as WikiSummary;
-		return data.originalimage?.source ?? data.thumbnail?.source ?? null;
+		// Prefer thumbnail (already a compressed derivative served by Wikipedia's CDN).
+		// Only fall back to originalimage if no thumbnail exists.
+		return data.thumbnail?.source ?? data.originalimage?.source ?? null;
 	} catch {
 		return null;
 	}
