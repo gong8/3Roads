@@ -1,10 +1,12 @@
+import { BASE_PATH, BASE_PATH_PREFIX } from "./base-path";
+
 // In dev, Vite proxy doesn't reliably forward WS upgrades, so connect directly to API
 const DEV_API_WS = `ws://${window.location.hostname}:7001/ws`;
 const PROD_WS =
 	window.location.protocol === "https:"
-		? `wss://${window.location.host}/ws`
-		: `ws://${window.location.host}/ws`;
-const WS_URL = import.meta.env.DEV ? DEV_API_WS : PROD_WS;
+		? `wss://${window.location.host}${BASE_PATH_PREFIX}/ws`
+		: `ws://${window.location.host}${BASE_PATH_PREFIX}/ws`;
+const WS_URL = import.meta.env.DEV && BASE_PATH === "/" ? DEV_API_WS : PROD_WS;
 
 export interface GameSocket {
 	send: (msg: Record<string, unknown>) => void;
