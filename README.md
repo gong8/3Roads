@@ -70,3 +70,10 @@ DATABASE_URL=file:../data/3roads.db
 ```
 
 This uses a relative path and works on all platforms. For local overrides, create `.env.local` (gitignored).
+
+The web app defaults to being hosted at `/`. For a production subpath deployment, set the same
+path at build time; Vite assets, React Router, API/audio requests, and WebSockets will all use it:
+
+```sh
+VITE_BASE_PATH=/3roads/ pnpm build
+```

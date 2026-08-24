@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
+import { ROUTER_BASENAME } from "./lib/base-path";
 import { Browse } from "./pages/Browse";
 import { GameRoom } from "./pages/GameRoom";
 import { Generate } from "./pages/Generate";
@@ -15,7 +16,7 @@ const queryClient = new QueryClient();
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
+      <BrowserRouter basename={ROUTER_BASENAME}>
         <Routes>
           <Route element={<Layout />}>
             <Route path="/" element={<Browse />} />
