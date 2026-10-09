@@ -103,8 +103,17 @@ export function useGenerate() {
             }));
             qc.invalidateQueries({ queryKey: ["sets"] });
           }
-        } catch {
-          // Polling error — keep trying
+        } catch (err) {
+          // Set was deleted — stop polling; other errors are transient, keep trying
+          if ((err as Error).message === "API error 404") {
+            stopPolling();
+            setState((s) => ({
+              ...s,
+              isGenerating: false,
+              status: "error",
+              error: "Set no longer exists",
+            }));
+          }
         }
       }, 2000);
     } catch (err) {
