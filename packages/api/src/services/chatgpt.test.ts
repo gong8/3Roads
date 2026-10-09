@@ -55,29 +55,27 @@ test("sign-in: pasted callback is bound to the starting browser and lands tokens
 	const state = authorize.searchParams.get("state");
 	const callback = `http://127.0.0.1:1455/auth/callback?code=c1&state=${state}&client_id=oaiapp_123`;
 	const loginJar = cookiesFrom(start);
+	assert.match(start.headers.getSetCookie().find((l) => l.startsWith("cg_login=")) ?? "", /HttpOnly/);
 
-	// Another browser pasting the same URL is rejected.
-	const stranger = await authRoutes.request("/chatgpt/complete", {
-		method: "POST",
-		headers: { "content-type": "application/json", cookie: "cg_login=someone-else" },
-		body: JSON.stringify({ url: callback }),
-	});
-	assert.equal(stranger.status, 400);
+	// Another browser (without the sign-in cookie) pasting the same URL is rejected.
+	for (const cookie of ["", `cg_login=${b64({ state: "other", verifier: "v", nonce: "n", clientId: "x" })}`]) {
+		const stranger = await authRoutes.request("/chatgpt/complete", {
+			method: "POST",
+			headers: { "content-type": "application/json", cookie },
+			body: JSON.stringify({ url: callback }),
+		});
+		assert.equal(stranger.status, 400);
+	}
 	assert.equal(exchanges, 0);
 
-	// Then a normal sign-in from the browser that started it.
-	const start2 = await authRoutes.request("/chatgpt/start", { method: "POST" });
-	const url2 = new URL(((await start2.json()) as { url: string }).url);
-	nonce = url2.searchParams.get("nonce") ?? "";
+	// The browser that started it can finish.
 	const done = await authRoutes.request("/chatgpt/complete", {
 		method: "POST",
-		headers: { "content-type": "application/json", cookie: cookieHeader(cookiesFrom(start2)) },
-		body: JSON.stringify({
-			url: `http://127.0.0.1:1455/auth/callback?code=c2&state=${url2.searchParams.get("state")}&client_id=oaiapp_123`,
-		}),
+		headers: { "content-type": "application/json", cookie: cookieHeader(loginJar) },
+		body: JSON.stringify({ url: callback }),
 	});
 	assert.equal(done.status, 200, await done.clone().text());
-	assert.equal(tokenBody?.get("code"), "c2");
+	assert.equal(tokenBody?.get("code"), "c1");
 	assert.equal(tokenBody?.get("client_id"), "oaiapp_123");
 	assert.ok(tokenBody?.get("code_verifier"));
 	for (const line of done.headers.getSetCookie().filter((l) => /^cg_(at|rt|meta)=/.test(l))) {
@@ -87,7 +85,6 @@ test("sign-in: pasted callback is bound to the starting browser and lands tokens
 	const jar = cookiesFrom(done);
 	assert.equal(jar.get("cg_at"), "at-1");
 	assert.equal(jar.get("cg_rt"), "rt-1");
-	assert.ok(loginJar.has("cg_login"));
 });
 
 test("refresh: concurrent requests with an expiring token rotate the refresh token once", async (t) => {
@@ -110,6 +107,16 @@ test("refresh: concurrent requests with an expiring token rotate the refresh tok
 
 	const signedOut = await app.request("/");
 	assert.equal(await signedOut.text(), "none");
+
+	// Made-up refresh tokens fail and leave the flight map at once instead of filling it.
+	globalThis.fetch = (async () => Response.json({ error: "invalid_grant" }, { status: 400 })) as typeof fetch;
+	for (let i = 0; i < 5; i++) {
+		const bogus = `cg_at=a; cg_rt=bogus-${i}; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: 0 })}`;
+		const res = await app.request("/", { headers: { cookie: bogus } });
+		assert.equal(await res.text(), "none");
+	}
+	const fresh = `cg_at=at-9; cg_rt=rt-9; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: Date.now() + 3_600_000 })}`;
+	assert.equal(await (await app.request("/", { headers: { cookie: fresh } })).text(), "at-9");
 });
 
 test("responses: plan-usage request shape and tool-call stream parsing", async () => {

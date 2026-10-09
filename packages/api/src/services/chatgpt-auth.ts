@@ -80,22 +80,21 @@ function getHostId(): string {
 	return hostId;
 }
 
-// Pending sign-ins, keyed by OAuth state. PKCE verifier and nonce stay server-side.
-// ponytail: in-memory, a restart mid-sign-in just means signing in again.
-const pending = new Map<
-	string,
-	{ verifier: string; nonce: string; clientId: string; browser: string; createdAt: number }
->();
+// A sign-in in progress (PKCE verifier, state, nonce) lives in the starting browser's own
+// HttpOnly cookie, not in server memory: nothing for unauthenticated requests to fill or
+// evict, and only the browser that started a sign-in can finish it.
 const PENDING_TTL = 10 * 60_000;
-// Both maps are filled by unauthenticated requests, so they are capped; Maps iterate
-// oldest first. Evicting a refresh flight only risks one extra refresh for that user.
-const MAX_ENTRIES = 1000;
-function cap(map: Map<string, unknown>) {
-	for (const key of map.keys()) {
-		if (map.size <= MAX_ENTRIES) break;
-		map.delete(key);
-	}
+interface Pending {
+	state: string;
+	verifier: string;
+	nonce: string;
+	clientId: string;
 }
+
+// Refresh flights are keyed by caller-supplied cookies, so the map is bounded. When full,
+// new refreshes fail closed (the caller sees "signed out") instead of evicting a live
+// flight, which could let a second refresh reuse a rotated token and revoke the session.
+const MAX_REFRESH_FLIGHTS = 1000;
 
 function isHttps(c: Context): boolean {
 	return c.req.header("x-forwarded-proto") === "https" || new URL(c.req.url).protocol === "https:";
@@ -162,13 +161,9 @@ async function tokenRequest(body: Record<string, string>): Promise<TokenResponse
 
 /** Starts a sign-in; returns the OpenAI URL the browser should open. */
 export function beginLogin(c: Context): string {
-	const now = Date.now();
-	for (const [key, value] of pending) if (now - value.createdAt > PENDING_TTL) pending.delete(key);
-
 	const verifier = b64url(randomBytes(32));
 	const state = b64url(randomBytes(24));
 	const nonce = b64url(randomBytes(24));
-	const browser = b64url(randomBytes(24));
 	// Reuse this browser's issued client ID; first sign-in registers through the dynamic entrypoint.
 	const clientId = readMeta(getCookie(c, META))?.clientId ?? "dynamic_agent_client";
 
@@ -187,10 +182,8 @@ export function beginLogin(c: Context): string {
 		params.set("agent_name_hint", "3Roads");
 		params.set("ext_agent_host_id", getHostId());
 	}
-	pending.set(state, { verifier, nonce, clientId, browser, createdAt: now });
-	cap(pending);
-	// Binds the pasted callback to the browser that started the sign-in.
-	setCookie(c, LOGIN, browser, cookieOpts(c, PENDING_TTL / 1000));
+	const pending: Pending = { state, verifier, nonce, clientId };
+	setCookie(c, LOGIN, Buffer.from(JSON.stringify(pending)).toString("base64url"), cookieOpts(c, PENDING_TTL / 1000));
 	return `${authorizeUrl}?${params}`;
 }
 
@@ -202,11 +195,13 @@ export async function completeLogin(c: Context, pastedUrl: string): Promise<{ em
 	} catch {
 		throw new AuthError("That doesn't look like a URL. Paste the whole address from the address bar.");
 	}
-	const attempt = pending.get(query.get("state") ?? "");
-	if (!attempt || attempt.browser !== getCookie(c, LOGIN)) {
-		throw new AuthError("Unknown or expired sign-in attempt. Start again.");
+	let attempt: Pending | undefined;
+	try {
+		attempt = JSON.parse(Buffer.from(getCookie(c, LOGIN) ?? "", "base64url").toString("utf8")) as Pending;
+	} catch {}
+	if (!attempt?.state || attempt.state !== query.get("state")) {
+		throw new AuthError("Unknown or expired sign-in attempt. Start again in this browser.");
 	}
-	pending.delete(query.get("state") ?? "");
 	deleteCookie(c, LOGIN, { path: "/" });
 
 	const error = query.get("error");
@@ -270,6 +265,7 @@ export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promi
 
 	let flight = refreshing.get(refreshToken);
 	if (!flight) {
+		if (refreshing.size >= MAX_REFRESH_FLIGHTS) throw new AuthError("Too many sign-in refreshes in progress");
 		flight = tokenRequest({
 			grant_type: "refresh_token",
 			client_id: meta.clientId,
@@ -277,9 +273,12 @@ export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promi
 			resource: RESOURCE,
 		}).then((tokens) => ({ tokens, at: Date.now() }));
 		refreshing.set(refreshToken, flight);
-		cap(refreshing);
-		// Keep the result briefly so requests already in flight with the old cookie reuse it.
-		flight.finally(() => setTimeout(() => refreshing.delete(refreshToken), 60_000).unref()).catch(() => {});
+		// Keep a success briefly so requests already in flight with the old cookie reuse it.
+		// Failures (e.g. made-up tokens) leave at once, so they can't fill the map.
+		flight.then(
+			() => setTimeout(() => refreshing.delete(refreshToken), 60_000).unref(),
+			() => refreshing.delete(refreshToken),
+		);
 	}
 	try {
 		const { tokens } = await flight;
