@@ -1,4 +1,5 @@
-export const API_BASE = import.meta.env.DEV ? "/api" : "";
+export { API_BASE } from "./base-path";
+import { API_BASE } from "./base-path";
 
 export async function apiGet<T>(path: string): Promise<T> {
   const url = `${API_BASE}${path}`;

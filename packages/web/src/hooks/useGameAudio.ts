@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef } from "react";
 import type { GameState } from "./useGameRoom";
+import { API_BASE, BASE_PATH } from "../lib/base-path";
 
-const API_BASE = import.meta.env.DEV ? `http://${window.location.hostname}:7001` : "";
+const AUDIO_BASE = import.meta.env.DEV && BASE_PATH === "/"
+	? `http://${window.location.hostname}:7001`
+	: API_BASE;
 
 export function useGameAudio(state: GameState, sendAudioReady: () => void): void {
 	const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -27,7 +30,7 @@ export function useGameAudio(state: GameState, sendAudioReady: () => void): void
 			old.removeAttribute("src");
 			old.load();
 		}
-		const a = new Audio(`${API_BASE}${url}`);
+		const a = new Audio(`${AUDIO_BASE}${url}`);
 		audioRef.current = a;
 		// Signal server when audio actually starts playing
 		a.addEventListener("playing", () => {
