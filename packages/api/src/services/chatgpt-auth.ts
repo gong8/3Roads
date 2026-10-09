@@ -87,6 +87,15 @@ const pending = new Map<
 	{ verifier: string; nonce: string; clientId: string; browser: string; createdAt: number }
 >();
 const PENDING_TTL = 10 * 60_000;
+// Both maps are filled by unauthenticated requests, so they are capped; Maps iterate
+// oldest first. Evicting a refresh flight only risks one extra refresh for that user.
+const MAX_ENTRIES = 1000;
+function cap(map: Map<string, unknown>) {
+	for (const key of map.keys()) {
+		if (map.size <= MAX_ENTRIES) break;
+		map.delete(key);
+	}
+}
 
 function isHttps(c: Context): boolean {
 	return c.req.header("x-forwarded-proto") === "https" || new URL(c.req.url).protocol === "https:";
@@ -179,6 +188,7 @@ export function beginLogin(c: Context): string {
 		params.set("ext_agent_host_id", getHostId());
 	}
 	pending.set(state, { verifier, nonce, clientId, browser, createdAt: now });
+	cap(pending);
 	// Binds the pasted callback to the browser that started the sign-in.
 	setCookie(c, LOGIN, browser, cookieOpts(c, PENDING_TTL / 1000));
 	return `${authorizeUrl}?${params}`;
@@ -267,6 +277,7 @@ export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promi
 			resource: RESOURCE,
 		}).then((tokens) => ({ tokens, at: Date.now() }));
 		refreshing.set(refreshToken, flight);
+		cap(refreshing);
 		// Keep the result briefly so requests already in flight with the old cookie reuse it.
 		flight.finally(() => setTimeout(() => refreshing.delete(refreshToken), 60_000).unref()).catch(() => {});
 	}

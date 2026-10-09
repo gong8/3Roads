@@ -97,7 +97,7 @@ export async function judgeAnswer(
 	canonicalAnswer: string,
 	questionText: string,
 	strictness: number,
-	/** A signed-in player's ChatGPT token; without one, ambiguous answers are judged incorrect. */
+	/** The answering player's ChatGPT token; without one, ambiguous answers are judged incorrect. */
 	token?: string,
 ): Promise<{ correct: boolean }> {
 	if (!submittedAnswer.trim()) {
@@ -113,7 +113,7 @@ export async function judgeAnswer(
 
 	// Slow path: fall back to LLM for ambiguous cases
 	if (!token) {
-		log.info(`judge [local] — submitted="${submittedAnswer}" unsure and nobody in the room is signed in, verdict=incorrect`);
+		log.info(`judge [local] — submitted="${submittedAnswer}" unsure and the player is not signed in, verdict=incorrect`);
 		return { correct: false };
 	}
 	// Strip bracketed moderator notes (e.g. "[prompt on X]") from canonical before sending to LLM
@@ -148,18 +148,15 @@ const JUDGE_MODEL = process.env.OPENAI_JUDGE_MODEL || DEFAULT_MODEL;
 export const socketTokens = new WeakMap<WebSocket, { token: string; expiresAt: number }>();
 
 /**
- * A usable token for judging in this room: the answering player's, else any other player's.
- * ponytail: tokens are captured at connect and not refreshed, so after an hour the room
- * falls back to local judging only; refresh over the socket if long games need the LLM.
+ * The answering player's own token, if they are signed in. Never another player's:
+ * one player's answers must not spend someone else's ChatGPT plan.
+ * ponytail: captured at connect and not refreshed, so after an hour that player falls
+ * back to local judging; refresh over the socket if long games need the LLM.
  */
-export function roomToken(room: GameRoom, preferPlayerId?: string): string | undefined {
-	const players = [...room.players.values()];
-	players.sort((a, b) => Number(b.id === preferPlayerId) - Number(a.id === preferPlayerId));
-	for (const p of players) {
-		const t = socketTokens.get(p.ws);
-		if (t && t.expiresAt > Date.now() + 30_000) return t.token;
-	}
-	return undefined;
+export function playerToken(room: GameRoom, playerId: string): string | undefined {
+	const ws = room.players.get(playerId)?.ws;
+	const t = ws && socketTokens.get(ws);
+	return t && t.expiresAt > Date.now() + 30_000 ? t.token : undefined;
 }
 
 function fetchJudge(token: string, systemPrompt: string, userPrompt: string): Promise<string> {
