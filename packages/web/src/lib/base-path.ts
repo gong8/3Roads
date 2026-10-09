@@ -8,5 +8,5 @@ export const BASE_PATH_PREFIX = BASE_PATH === "/" ? "" : BASE_PATH.slice(0, -1);
 
 export const ROUTER_BASENAME = BASE_PATH_PREFIX || "/";
 
-/** Local development keeps its existing proxy; deployed requests share the app mount path. */
-export const API_BASE = import.meta.env.DEV && BASE_PATH === "/" ? "/api" : BASE_PATH_PREFIX;
+/** The API is served under /api below the app mount path (dev proxies /api to the API server). */
+export const API_BASE = `${BASE_PATH_PREFIX}/api`;

@@ -12,6 +12,9 @@ interface QuestionSet {
   createdAt: string;
   updatedAt: string;
   folderId: string | null;
+  /** True when the signed-in user owns this set. */
+  mine: boolean;
+  isPrivate: boolean;
   tossupCount?: number;
   bonusCount?: number;
   tossups?: Tossup[];
@@ -76,7 +79,7 @@ export function useDeleteSet() {
 export function useUpdateSet() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, ...data }: { id: string; folderId?: string | null }) =>
+    mutationFn: ({ id, ...data }: { id: string; folderId?: string | null; isPrivate?: boolean }) =>
       apiPatch<QuestionSet>(`/sets/${id}`, data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["sets"] });

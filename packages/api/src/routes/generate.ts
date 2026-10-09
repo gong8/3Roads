@@ -5,6 +5,8 @@ import { streamSSE } from "hono/streaming";
 import { streamLlmChat } from "../services/llm-chat.js";
 import { runGeneration } from "../services/generate-orchestrator.js";
 import { startStream, subscribe } from "../services/stream-manager.js";
+import { getAccessToken } from "../services/chatgpt-auth.js";
+import { currentUser } from "../services/user-auth.js";
 
 const log = createLogger("api:generate");
 
@@ -41,6 +43,11 @@ function pipeStreamToSSE(c: Context, setId: string) {
 generateRoutes.post("/stream", async (c) => {
 	log.info("POST /generate/stream — request received");
 
+	const user = currentUser(c);
+	if (!(await getAccessToken(user.id).catch(() => null))) {
+		return c.json({ error: "Connect ChatGPT in settings to generate questions" }, 403);
+	}
+
 	try {
 		const body = await c.req.json<{
 			theme: string;
@@ -63,7 +70,7 @@ generateRoutes.post("/stream", async (c) => {
 
 		// Create the question set
 		const set = await db.questionSet.create({
-			data: { name: body.theme, theme: body.theme, difficulty },
+			data: { name: body.theme, theme: body.theme, difficulty, ownerId: user.id },
 		});
 
 		log.info(`POST /generate/stream — created set ${set.id} theme="${body.theme}" tossups=${body.tossupCount} bonuses=${body.bonusCount}`);
@@ -134,6 +141,8 @@ Each bonus has:
 			prompt,
 			systemPrompt,
 			model: body.model,
+			userId: user.id,
+			setId: set.id,
 		});
 
 		startStream(set.id, cliStream);
@@ -196,6 +205,11 @@ Each bonus has:
 generateRoutes.post("/", async (c) => {
 	log.info("POST /generate — request received");
 
+	const user = currentUser(c);
+	if (!(await getAccessToken(user.id).catch(() => null))) {
+		return c.json({ error: "Connect ChatGPT in settings to generate questions" }, 403);
+	}
+
 	try {
 		const body = await c.req.json<{
 			theme: string;
@@ -219,6 +233,7 @@ generateRoutes.post("/", async (c) => {
 				theme: body.theme,
 				difficulty,
 				status: "generating",
+				ownerId: user.id,
 			},
 		});
 
@@ -233,6 +248,7 @@ generateRoutes.post("/", async (c) => {
 			bonusCount: body.bonusCount || 0,
 			pictureCount: body.pictureCount || 0,
 			model: body.model,
+			userId: user.id,
 		}).catch((err) => {
 			log.error(`POST /generate — background generation failed for ${set.id}: ${err}`);
 		});

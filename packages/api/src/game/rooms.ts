@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@3roads/shared";
 import type { WebSocket } from "ws";
+import { socketUsers } from "./socket-users.js";
 import type { BonusData, ExternalPacket, GameMode, GameRoom, Player, TossupData } from "./types.js";
 
 const log = createLogger("api:game:rooms");
@@ -53,8 +54,10 @@ export async function createRoom(
 	} else {
 		if (!questionSetId) throw new Error("questionSetId or externalPacket required");
 		const db = getDb();
-		const set = await db.questionSet.findUnique({
-			where: { id: questionSetId },
+		// Only sets the creator can see: the public pool plus their own private ones.
+		const userId = socketUsers.get(ws);
+		const set = await db.questionSet.findFirst({
+			where: { id: questionSetId, OR: [{ isPrivate: false }, ...(userId ? [{ ownerId: userId }] : [])] },
 			include: {
 				tossups: { orderBy: { createdAt: "asc" } },
 				bonuses: {
@@ -186,7 +189,13 @@ export function reconnectPlayer(
 ): { room: GameRoom; playerId: string } | null {
 	// Check disconnected players first
 	for (const [key, disc] of disconnectedPlayers) {
-		if (disc.roomCode === roomCode && disc.player.name === playerName) {
+		// Same name is not enough: only the same account gets its seat (score, moderator
+		// rights, and whose plan judges its answers) back.
+		if (
+			disc.roomCode === roomCode &&
+			disc.player.name === playerName &&
+			socketUsers.get(disc.player.ws) === socketUsers.get(ws)
+		) {
 			clearTimeout(disc.timeout);
 			disconnectedPlayers.delete(key);
 			const room = activeRooms.get(roomCode);
@@ -290,4 +299,4 @@ setInterval(() => {
 			cleanupRoom(code);
 		}
 	}
-}, 60_000);
+}, 60_000).unref(); // the server keeps the process alive, not this sweep

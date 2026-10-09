@@ -1,4 +1,5 @@
 import { createLogger } from "@3roads/shared";
+import { DEFAULT_MODEL, runLlmChatSimple } from "../services/llm-chat.js";
 
 const log = createLogger("api:game:judge");
 
@@ -94,6 +95,11 @@ export async function judgeAnswer(
 	canonicalAnswer: string,
 	questionText: string,
 	strictness: number,
+	/**
+	 * The answering player's user ID. Their own ChatGPT plan pays for LLM judging, never
+	 * another player's; without a connected plan, ambiguous answers are judged incorrect.
+	 */
+	userId?: string,
 ): Promise<{ correct: boolean }> {
 	if (!submittedAnswer.trim()) {
 		return { correct: false };
@@ -107,6 +113,10 @@ export async function judgeAnswer(
 	}
 
 	// Slow path: fall back to LLM for ambiguous cases
+	if (!userId) {
+		log.info(`judge [local] — submitted="${submittedAnswer}" unsure and the player is not identified, verdict=incorrect`);
+		return { correct: false };
+	}
 	// Strip bracketed moderator notes (e.g. "[prompt on X]") from canonical before sending to LLM
 	const canonicalForLlm = canonicalAnswer.replace(/\s*\[[^\]]*\]/g, "").trim();
 	log.info(`judge [llm] — local unsure, falling back to LLM for submitted="${submittedAnswer}" canonical="${canonicalForLlm}"`);
@@ -120,7 +130,7 @@ export async function judgeAnswer(
 	].join("\n");
 
 	try {
-		const result = await fetchJudge(systemPrompt, userPrompt);
+		const result = await fetchJudge(userId, systemPrompt, userPrompt);
 		const correct = result.trim().toLowerCase().includes("correct") &&
 			!result.trim().toLowerCase().startsWith("incorrect");
 		log.info(`judge [llm] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${correct ? "correct" : "incorrect"}`);
@@ -133,38 +143,14 @@ export async function judgeAnswer(
 
 // -- LLM backend --
 
-const OPENROUTER_JUDGE_MODEL =
-	process.env.OPENROUTER_JUDGE_MODEL || process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3-contributor";
+const JUDGE_MODEL = process.env.OPENAI_JUDGE_MODEL || DEFAULT_MODEL;
 
-log.info(`Judge LLM backend: OpenRouter (model=${OPENROUTER_JUDGE_MODEL})`);
-
-async function fetchJudge(systemPrompt: string, userPrompt: string): Promise<string> {
-	const apiKey = process.env.OPENROUTER_API_KEY;
-	if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
-
-	const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-			"X-Title": "3Roads",
-		},
-		body: JSON.stringify({
-			model: OPENROUTER_JUDGE_MODEL,
-			max_tokens: 16,
-			messages: [
-				{ role: "system", content: systemPrompt },
-				{ role: "user", content: userPrompt },
-			],
-		}),
-		signal: AbortSignal.timeout(10000),
+function fetchJudge(userId: string, systemPrompt: string, userPrompt: string): Promise<string> {
+	return runLlmChatSimple({
+		userId,
+		model: JUDGE_MODEL,
+		systemPrompt,
+		prompt: userPrompt,
+		signal: AbortSignal.timeout(15_000),
 	});
-
-	if (!res.ok) {
-		const body = await res.text().catch(() => "");
-		throw new Error(`OpenRouter ${res.status}: ${body.slice(0, 200)}`);
-	}
-
-	const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-	return data.choices?.[0]?.message?.content ?? "";
 }

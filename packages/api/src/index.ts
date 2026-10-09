@@ -5,15 +5,15 @@ import { extname, join } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { createLogger, getDb, initDb } from "@3roads/shared";
 import { Hono } from "hono";
-import { cors } from "hono/cors";
 import { attachGameWebSocket, getActiveRoomsList } from "./game/index.js";
 import { getAudio } from "./game/tts.js";
 import { foldersRoutes } from "./routes/folders.js";
 import { generateRoutes } from "./routes/generate.js";
+import { meRoutes } from "./routes/me.js";
 import { pictureRoundsRoutes } from "./routes/picture-rounds.js";
 import { qbreaderRoutes } from "./routes/qbreader.js";
-import { questionsRoutes } from "./routes/questions.js";
 import { setsRoutes } from "./routes/sets.js";
+import { requireUser } from "./services/user-auth.js";
 
 const log = createLogger("api");
 const routeLog = createLogger("api:routes");
@@ -30,7 +30,10 @@ if (orphaned.count > 0) log.warn(`Marked ${orphaned.count} orphaned generating s
 
 const app = new Hono();
 
-app.use("*", cors());
+// The API lives under /api so it never collides with SPA routes like /sets/:id, and all
+// of it requires a signed-in (invited) user. Same-origin only, so no CORS headers.
+const api = new Hono();
+api.use("*", requireUser);
 
 // Global error handler — catches anything that slips through route-level try/catch
 app.onError((err, c) => {
@@ -40,62 +43,15 @@ app.onError((err, c) => {
 	return c.json({ error: message }, 500);
 });
 
-app.route("/generate", generateRoutes);
-app.route("/sets", setsRoutes);
-app.route("/folders", foldersRoutes);
-app.route("/questions", questionsRoutes);
-app.route("/qbreader", qbreaderRoutes);
-app.route("/picture-rounds", pictureRoundsRoutes);
-
-// Mount tossup/bonus deletion at root level
-app.delete("/tossups/:id", async (c) => {
-	const { id } = c.req.param();
-	routeLog.info(`DELETE /tossups/${id} — request received`);
-	try {
-		const db = getDb();
-
-		const tossup = await db.tossup.findUnique({ where: { id } });
-		if (!tossup) {
-			routeLog.warn(`DELETE /tossups/${id} — tossup not found`);
-			return c.json({ error: "Tossup not found" }, 404);
-		}
-
-		await db.tossup.delete({ where: { id } });
-		routeLog.info(`DELETE /tossups/${id} — deleted`);
-		return c.json({ ok: true });
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		const stack = err instanceof Error ? err.stack : undefined;
-		routeLog.error(`DELETE /tossups/${id} — error: ${message}`, stack ?? err);
-		return c.json({ error: message }, 500);
-	}
-});
-
-app.delete("/bonuses/:id", async (c) => {
-	const { id } = c.req.param();
-	routeLog.info(`DELETE /bonuses/${id} — request received`);
-	try {
-		const db = getDb();
-
-		const bonus = await db.bonus.findUnique({ where: { id } });
-		if (!bonus) {
-			routeLog.warn(`DELETE /bonuses/${id} — bonus not found`);
-			return c.json({ error: "Bonus not found" }, 404);
-		}
-
-		await db.bonus.delete({ where: { id } });
-		routeLog.info(`DELETE /bonuses/${id} — deleted`);
-		return c.json({ ok: true });
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		const stack = err instanceof Error ? err.stack : undefined;
-		routeLog.error(`DELETE /bonuses/${id} — error: ${message}`, stack ?? err);
-		return c.json({ error: message }, 500);
-	}
-});
+api.route("/me", meRoutes);
+api.route("/generate", generateRoutes);
+api.route("/sets", setsRoutes);
+api.route("/folders", foldersRoutes);
+api.route("/qbreader", qbreaderRoutes);
+api.route("/picture-rounds", pictureRoundsRoutes);
 
 // Serve cached TTS audio
-app.get("/audio/:id", (c) => {
+api.get("/audio/:id", (c) => {
 	const buf = getAudio(c.req.param("id"));
 	if (!buf) return c.json({ error: "Not found" }, 404);
 	return new Response(buf, {
@@ -103,7 +59,9 @@ app.get("/audio/:id", (c) => {
 	});
 });
 
-app.get("/game/rooms", (c) => c.json(getActiveRoomsList()));
+api.get("/game/rooms", (c) => c.json(getActiveRoomsList()));
+
+app.route("/api", api);
 
 // --- Static file serving for tunnel/production mode ---
 const STATIC_DIR = process.env.SERVE_STATIC;
