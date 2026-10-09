@@ -21,7 +21,7 @@ export function Generate() {
   const pictureCount = Math.min(tossupCount, Math.max(0, parseInt(pictureCountStr, 10) || 0));
   const [includeBonuses, setIncludeBonuses] = useState(true);
   const [difficulty, setDifficulty] = useState("Regular High School");
-  const [model, setModel] = useState("meta/muse-spark-1.3");
+  const [model, setModel] = useState("meta/muse-spark-1.3-contributor");
   const {
     isGenerating, error, setId, status,
     tossupCount: savedTossups, bonusCount: savedBonuses,
@@ -90,6 +90,7 @@ export function Generate() {
             className="border border-black px-2 py-1 font-mono"
             disabled={isGenerating}
           >
+            <option value="meta/muse-spark-1.3-contributor">Muse Spark 1.3 Contributor (Cheapest)</option>
             <option value="meta/muse-spark-1.3">Muse Spark 1.3</option>
             <option value="meta/muse-spark-1.2">Muse Spark 1.2</option>
             <option value="meta/muse-glimmer-30b">Muse Glimmer 30B (Fast, Cheaper)</option>

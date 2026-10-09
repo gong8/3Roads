@@ -134,7 +134,7 @@ export async function judgeAnswer(
 // -- LLM backend --
 
 const OPENROUTER_JUDGE_MODEL =
-	process.env.OPENROUTER_JUDGE_MODEL || process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3";
+	process.env.OPENROUTER_JUDGE_MODEL || process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3-contributor";
 
 log.info(`Judge LLM backend: OpenRouter (model=${OPENROUTER_JUDGE_MODEL})`);
 

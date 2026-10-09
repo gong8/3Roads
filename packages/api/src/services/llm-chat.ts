@@ -7,7 +7,7 @@ const log = createLogger("api:llm");
 
 const MCP_URL = process.env.MCP_URL || "http://127.0.0.1:7002/mcp";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3";
+const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3-contributor";
 const MAX_TURNS = 10;
 
 // Tools are exposed to the model with the same names the prompts (and web UI) already use
