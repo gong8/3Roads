@@ -10,8 +10,8 @@ import type { Context, Next } from "hono";
 const log = createLogger("api:user-auth");
 
 const JWT_KEY = process.env.CLERK_JWT_KEY?.replace(/\\n/g, "\n");
-// Origins allowed to present session tokens (Clerk's `azp` check).
-const AUTHORIZED_PARTIES = (process.env.CLERK_AUTHORIZED_PARTIES ?? "http://localhost:7003")
+// Origins allowed to present session tokens (Clerk's `azp` check), and to open game sockets.
+export const AUTHORIZED_PARTIES = (process.env.CLERK_AUTHORIZED_PARTIES ?? "http://localhost:7003")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);

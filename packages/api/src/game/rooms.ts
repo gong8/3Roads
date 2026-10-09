@@ -189,7 +189,13 @@ export function reconnectPlayer(
 ): { room: GameRoom; playerId: string } | null {
 	// Check disconnected players first
 	for (const [key, disc] of disconnectedPlayers) {
-		if (disc.roomCode === roomCode && disc.player.name === playerName) {
+		// Same name is not enough: only the same account gets its seat (score, moderator
+		// rights, and whose plan judges its answers) back.
+		if (
+			disc.roomCode === roomCode &&
+			disc.player.name === playerName &&
+			socketUsers.get(disc.player.ws) === socketUsers.get(ws)
+		) {
 			clearTimeout(disc.timeout);
 			disconnectedPlayers.delete(key);
 			const room = activeRooms.get(roomCode);
@@ -293,4 +299,4 @@ setInterval(() => {
 			cleanupRoom(code);
 		}
 	}
-}, 60_000);
+}, 60_000).unref(); // the server keeps the process alive, not this sweep

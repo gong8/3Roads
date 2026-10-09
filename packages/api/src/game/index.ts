@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import { createLogger } from "@3roads/shared";
 import { WebSocketServer } from "ws";
-import { userFromHeaders } from "../services/user-auth.js";
+import { AUTHORIZED_PARTIES, userFromHeaders } from "../services/user-auth.js";
 import { socketUsers } from "./socket-users.js";
 import { handleConnection } from "./ws-handler.js";
 import { activeRooms } from "./rooms.js";
@@ -16,6 +16,12 @@ export function attachGameWebSocket(server: Server): void {
 
 		if (url.pathname !== "/ws") {
 			socket.destroy();
+			return;
+		}
+		// Browsers attach cookies to WebSocket handshakes from any site and CORS doesn't
+		// apply, so only our own pages may open a game socket (no cross-site hijacking).
+		if (!AUTHORIZED_PARTIES.includes(request.headers.origin ?? "")) {
+			socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
 			return;
 		}
 		// Same rule as the HTTP API: only signed-in users may open a game socket.

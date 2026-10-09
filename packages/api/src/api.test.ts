@@ -231,3 +231,27 @@ test("responses: plan-usage request shape and truncated-stream rejection", async
 		/before response.completed/,
 	);
 });
+
+test("rooms: a dropped seat goes back only to the same account, not to anyone using the name", async () => {
+	const { createRoom, disconnectPlayer, reconnectPlayer, activeRooms } = await import("./game/rooms.js");
+	const { socketUsers } = await import("./game/socket-users.js");
+	type Ws = Parameters<typeof createRoom>[3];
+	const sock = (userId: string) => {
+		const ws = { send() {}, readyState: 1 } as unknown as Ws;
+		socketUsers.set(ws, userId);
+		return ws;
+	};
+	const packet = {
+		name: "p",
+		tossups: [{ id: "t1", question: "q", answer: "a", powerMarkIndex: null, category: "c", subcategory: "s", difficulty: "d" }],
+		bonuses: [],
+	};
+	const { room, playerId } = await createRoom(undefined, "alice", "ffa", sock("u_alice"), false, false, undefined, undefined, packet);
+	disconnectPlayer(room.code, playerId);
+
+	assert.equal(reconnectPlayer(room.code, "alice", sock("u_mallory")), null);
+	const back = reconnectPlayer(room.code, "alice", sock("u_alice"));
+	assert.equal(back?.playerId, playerId);
+	assert.equal(room.players.get(playerId)?.isModerator, true);
+	activeRooms.delete(room.code);
+});
