@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useGenerate } from "../hooks/useGenerate";
+import { formatCost } from "../lib/format";
 
 const DIFFICULTIES = [
   "Middle School",
@@ -25,7 +26,7 @@ export function Generate() {
   const {
     isGenerating, error, setId, status,
     tossupCount: savedTossups, bonusCount: savedBonuses,
-    targetTossups, targetBonuses,
+    targetTossups, targetBonuses, cost,
     generate,
   } = useGenerate();
 
@@ -168,6 +169,7 @@ export function Generate() {
           {isDone && setId && (
             <p className="mb-4">
               <Link to={`/sets/${setId}`} className="underline">view set</Link>
+              {cost != null && <span className="ml-3 text-sm text-gray-600">cost: {formatCost(cost)}</span>}
             </p>
           )}
         </div>

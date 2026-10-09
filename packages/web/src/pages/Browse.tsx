@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useSets, useUpdateSet, useDeleteSet } from "../hooks/useSets";
 import { useFolders, useCreateFolder, useUpdateFolder, useDeleteFolder } from "../hooks/useFolders";
 import type { Folder } from "../hooks/useFolders";
+import { formatCost } from "../lib/format";
 
 type Filter = "all" | "unfiled" | string; // string = folder id
 
@@ -128,6 +129,7 @@ export function Browse() {
               <th className="py-1">difficulty</th>
               <th className="py-1 text-center px-4">tossups</th>
               <th className="py-1 text-center px-4">bonuses</th>
+              <th className="py-1 text-right px-4">cost</th>
               <th className="py-1 px-4">folder</th>
               <th className="py-1">created</th>
               <th className="py-1 w-16 text-center"></th>
@@ -138,8 +140,17 @@ export function Browse() {
               <tr key={s.id} className="border-b border-gray-300">
                 <td className="py-1 break-words"><Link to={`/sets/${s.id}`} className="underline">{s.name}</Link></td>
                 <td className="py-1">{s.difficulty}</td>
-                <td className="py-1 text-center px-4">{s.tossupCount ?? 0}</td>
-                <td className="py-1 text-center px-4">{(s.bonusCount ?? 0) > 0 ? "✓" : "✗"}</td>
+                {s.status === "generating" ? (
+                  <td colSpan={3} className="py-1 text-center px-4 text-sm text-gray-500 italic">
+                    generating… ({s.tossupCount ?? 0} tossups, {s.bonusCount ?? 0} bonuses so far)
+                  </td>
+                ) : (
+                  <>
+                    <td className="py-1 text-center px-4">{s.tossupCount ?? 0}</td>
+                    <td className="py-1 text-center px-4">{(s.bonusCount ?? 0) > 0 ? "✓" : "✗"}</td>
+                    <td className="py-1 text-right px-4 text-sm">{s.cost != null ? formatCost(s.cost) : "—"}</td>
+                  </>
+                )}
                 <td className="py-1 px-4">
                   <select
                     className="border border-gray-300 text-sm"

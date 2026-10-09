@@ -7,6 +7,7 @@ type Status = "idle" | "generating" | "complete" | "error";
 interface SetResponse {
   id: string;
   status: Status;
+  cost: number | null;
   tossups: unknown[];
   bonuses: unknown[];
 }
@@ -19,6 +20,7 @@ interface GenerateState {
   bonusCount: number;
   targetTossups: number;
   targetBonuses: number;
+  cost: number | null;
   error: string | null;
 }
 
@@ -31,6 +33,7 @@ export function useGenerate() {
     bonusCount: 0,
     targetTossups: 0,
     targetBonuses: 0,
+    cost: null,
     error: null,
   });
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -64,6 +67,7 @@ export function useGenerate() {
       bonusCount: 0,
       targetTossups: tossupCount,
       targetBonuses: bonusCount,
+      cost: null,
       error: null,
     });
 
@@ -99,19 +103,22 @@ export function useGenerate() {
             setState((s) => ({
               ...s,
               isGenerating: false,
+              cost: set.cost,
               error: status === "error" ? "Generation failed" : null,
             }));
             qc.invalidateQueries({ queryKey: ["sets"] });
           }
         } catch (err) {
-          // Set was deleted — stop polling; other errors are transient, keep trying
+          // 404: the server deletes sets that finish with no questions (see
+          // generate-orchestrator), often before we observe status "error".
+          // Other errors are transient — keep trying.
           if ((err as Error).message === "API error 404") {
             stopPolling();
             setState((s) => ({
               ...s,
               isGenerating: false,
               status: "error",
-              error: "Set no longer exists",
+              error: "Generation failed — no questions were produced (check API logs)",
             }));
           }
         }

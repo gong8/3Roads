@@ -35,11 +35,20 @@ Calibrate clue difficulty and answer selection to the "${difficulty}" level:
 Each tossup MUST follow strict pyramidal structure:
 - **First 1-3 sentences:** Obscure, specific facts that only deep experts would know.
 - **Middle sentences:** Moderately difficult facts that knowledgeable players would recognize.
-- **Power mark (*) placement:** Insert after the transition from hard to moderate clues, roughly 1/3 to 1/2 through the question.
+- **Power mark placement:** Insert the literal text "(*)" (with parentheses) after the transition from hard to moderate clues, roughly 1/3 to 1/2 through the question.
 - **Final sentence (giveaway):** A well-known identifying fact, preceded by "For 10 points," or "FTP,"
-- **End with:** "ANSWER: [answer]"
+- **Answer:** Put the answer ONLY in the separate "answer" field. The question text must end with the giveaway sentence — never append "ANSWER: ..." to it.
 
 The giveaway clue must still require SOME knowledge — it should uniquely identify the answer but not be a direct restatement.
+
+## REFERRING TO THE ANSWER
+- **Every sentence** must refer to the answer directly with a "this <type>" phrase — "this food", "this author", "this country", "this term", "this element". Pick one type at the start and use it consistently through the whole tossup, including the "For 10 points" line.
+- Every clue must be a fact ABOUT the answer itself, not a free-standing story about a related person, place, or thing that only connects to the answer at the end.
+- The first sentence must NOT name or describe the answer's namesake, eponym, or etymological source, and must NOT use the answer's single most famous fact. Those are middle or late clues.
+
+Example — answer "sandwich":
+- BAD opening: "A British earl ordered cold meat between slices of bread so he could keep gambling." (doesn't say "this food", and gives away the namesake story immediately)
+- GOOD opening: "A 19th-century cookbook by Eliza Leslie gave a recipe for a ham version of this food calling for mustard." (obscure, and refers to the answer as "this food")
 
 ## WORKFLOW
 1. Write ALL tossups, then call mcp__3roads__save_tossups_batch ONCE with setId "${setId}" and the full array.
@@ -122,8 +131,9 @@ async function generatePictureTossups(params: {
 	count: number;
 	theme: string;
 	difficulty: string;
+	onCost?: (usd: number) => void;
 }): Promise<void> {
-	const { setId, count, theme, difficulty } = params;
+	const { setId, count, theme, difficulty, onCost } = params;
 	const db = getDb();
 
 	const MAX_ATTEMPTS = 3;
@@ -171,6 +181,7 @@ Output ONLY a JSON array, no markdown. Example:
 			const raw = await runLlmChatSimple({
 				prompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
+				onCost,
 			});
 			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
 			const parsed = JSON.parse(cleaned) as PictureTopic[];
@@ -229,6 +240,11 @@ export async function runGeneration(params: {
 	// Picture questions are drawn from the tossup budget; written tossups fill the remainder
 	const writtenTossupCount = Math.max(0, tossupCount - pictureCount);
 	const db = getDb();
+	// Total OpenRouter spend across every LLM call for this set
+	let cost = 0;
+	const onCost = (usd: number) => {
+		cost += usd;
+	};
 
 	try {
 		await db.questionSet.update({
@@ -254,6 +270,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 			const planResult = await runLlmChatSimple({
 				prompt: planPrompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
+				onCost,
 			});
 
 			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
@@ -274,13 +291,14 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 			if (writtenTossupCount > 0) {
 				const answerList = plan.tossup_answers.slice(0, writtenTossupCount).join("\n- ");
-				const tossupPrompt = `Write ${writtenTossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — refer to the subject only as 'this person', 'this country', 'this work', 'this element', etc. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
+				const tossupPrompt = `Write ${writtenTossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — every sentence must refer to the subject as 'this person', 'this country', 'this work', 'this element', etc., and the first sentence must not reveal its namesake, word origin, or most famous fact. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
 
 				tasks.push(
 					runLlmChat({
 						prompt: tossupPrompt,
 						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
 						model,
+						onCost,
 					}),
 				);
 			}
@@ -294,6 +312,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						prompt: bonusPrompt,
 						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
 						model,
+						onCost,
 					}),
 				);
 			}
@@ -302,7 +321,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		// Picture tossups run in parallel with regular generation
 		if (pictureCount > 0) {
 			tasks.push(
-				generatePictureTossups({ setId, count: pictureCount, theme, difficulty }),
+				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, onCost }),
 			);
 		}
 
@@ -319,15 +338,15 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		if (errors.length > 0) {
 			log.error(`[${setId}] Phase 2 errors: ${errors.join("; ")}`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
+			await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
 		} else {
-			log.info(`[${setId}] Generation complete`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "complete" } });
+			log.info(`[${setId}] Generation complete — cost=$${cost.toFixed(4)}`);
+			await db.questionSet.update({ where: { id: setId }, data: { status: "complete", cost } });
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		log.error(`[${setId}] Generation failed: ${msg}`);
-		await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
+		await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
 	}
 
 	// Clean up sets that ended up with no questions at all

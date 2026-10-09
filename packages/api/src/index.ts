@@ -20,6 +20,14 @@ const routeLog = createLogger("api:routes");
 
 await initDb();
 
+// Generation runs in-process, so any set still "generating" at startup was orphaned
+// by a restart (e.g. tsx watch) and will never finish.
+const orphaned = await getDb().questionSet.updateMany({
+	where: { status: "generating" },
+	data: { status: "error" },
+});
+if (orphaned.count > 0) log.warn(`Marked ${orphaned.count} orphaned generating set(s) as error`);
+
 const app = new Hono();
 
 app.use("*", cors());

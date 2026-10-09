@@ -13,6 +13,7 @@ model QuestionSet {
   theme      String
   difficulty String   @default("Regular High School")
   status     String   @default("idle")
+  cost       Float?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   folderId   String?

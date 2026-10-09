@@ -7,6 +7,8 @@ interface QuestionSet {
   name: string;
   theme: string;
   difficulty: string;
+  status: "idle" | "generating" | "complete" | "error";
+  cost: number | null;
   createdAt: string;
   updatedAt: string;
   folderId: string | null;
@@ -49,6 +51,9 @@ export function useSets() {
   return useQuery({
     queryKey: ["sets"],
     queryFn: () => apiGet<QuestionSet[]>("/sets"),
+    // Keep counts fresh while any set is still being generated
+    refetchInterval: (query) =>
+      query.state.data?.some((s) => s.status === "generating") ? 3000 : false,
   });
 }
 

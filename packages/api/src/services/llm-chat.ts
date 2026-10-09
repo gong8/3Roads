@@ -23,6 +23,7 @@ const SYSTEM_PROMPT_SUFFIX = [
 	"- NEVER reuse an answer across questions in the same set. Every tossup and every bonus part must have a distinct answer.",
 	"- NEVER write clues that transparently give away the answer through etymology, word games, or trivial restatement.",
 	"- Every tossup must be strictly pyramidal: hardest clues first, power mark at 1/3-1/2 through, giveaway last.",
+	"- In tossups, every sentence must refer to the answer with a 'this <type>' phrase (e.g. 'this food', 'this author'), and the first sentence must not reveal the answer's namesake, word origin, or most famous fact.",
 ].join("\n");
 
 function getApiKey(): string {
@@ -215,6 +216,8 @@ async function runAgentLoop(options: {
 	signal?: AbortSignal;
 	emit?: SSEEmitter;
 	useTools: boolean;
+	/** Called with each completion's USD cost as it's incurred, so failed runs are still counted. */
+	onCost?: (usd: number) => void;
 }): Promise<{ result: string; cost: number }> {
 	const model = resolveModel(options.model);
 	const startMs = performance.now();
@@ -238,6 +241,7 @@ async function runAgentLoop(options: {
 				options.signal,
 			);
 			totalCost += cost;
+			options.onCost?.(cost);
 			lastContent = content;
 
 			if (toolCalls.length === 0 || !mcp) break;
@@ -280,6 +284,7 @@ export interface LlmChatOptions {
 	systemPrompt: string;
 	model?: string;
 	signal?: AbortSignal;
+	onCost?: (usd: number) => void;
 }
 
 /** Tool-using generation run (saves questions via MCP). */
@@ -305,6 +310,7 @@ export async function runLlmChatSimple(options: {
 	prompt: string;
 	systemPrompt: string;
 	model?: string;
+	onCost?: (usd: number) => void;
 }): Promise<string> {
 	const { result } = await runAgentLoop({ ...options, useTools: false });
 	return result;
