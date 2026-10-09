@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +11,8 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 //
 // The server keeps no user credentials. Tokens live in the user's own HttpOnly
 // cookies and pass through this process only for the request that uses them.
+// The server signs the cookies it issues and ignores unsigned ones, so made-up
+// tokens never cause a request to OpenAI.
 // The flow only allows a 127.0.0.1 callback, so the user pastes the URL their
 // browser lands on back into 3Roads, which finishes the exchange.
 
@@ -53,6 +55,7 @@ interface Meta {
 	email?: string;
 	expiresAt: number; // epoch ms
 	earliestRefreshAt?: number; // epoch ms
+	sig?: string; // HMAC over the access token, refresh token and the fields above
 }
 
 interface TokenResponse {
@@ -66,18 +69,24 @@ interface TokenResponse {
 
 const b64url = (bytes: Buffer) => bytes.toString("base64url");
 
-// Stable, non-secret host ID for this 3Roads install (OpenAI asks for a persistent one).
+// Per-install state: the stable host ID OpenAI asks for, and a random key that signs
+// session cookies. The key is local to this install and grants no access to anything.
 const HOST_FILE =
 	process.env.CHATGPT_HOST_FILE ?? join(dirname(fileURLToPath(import.meta.url)), "../../../../data/chatgpt-host.json");
-let hostId: string | undefined;
-function getHostId(): string {
-	if (hostId) return hostId;
-	if (existsSync(HOST_FILE)) hostId = (JSON.parse(readFileSync(HOST_FILE, "utf8")) as { hostId: string }).hostId;
-	else {
-		hostId = `urn:uuid:${randomUUID()}`;
-		writeFileSync(HOST_FILE, JSON.stringify({ hostId }));
+let host: { hostId: string; cookieKey: string } | undefined;
+function getHost() {
+	if (host) return host;
+	const saved = existsSync(HOST_FILE)
+		? (JSON.parse(readFileSync(HOST_FILE, "utf8")) as { hostId?: string; cookieKey?: string })
+		: {};
+	host = {
+		hostId: saved.hostId ?? `urn:uuid:${randomUUID()}`,
+		cookieKey: saved.cookieKey ?? b64url(randomBytes(32)),
+	};
+	if (saved.hostId !== host.hostId || saved.cookieKey !== host.cookieKey) {
+		writeFileSync(HOST_FILE, JSON.stringify(host), { mode: 0o600 });
 	}
-	return hostId;
+	return host;
 }
 
 // A sign-in in progress (PKCE verifier, state, nonce) lives in the starting browser's own
@@ -89,20 +98,6 @@ interface Pending {
 	verifier: string;
 	nonce: string;
 	clientId: string;
-}
-
-// Refresh flights are keyed by caller-supplied cookies, so each client IP may start only a
-// few at once. Past that, that client's refreshes fail closed (it sees "signed out"); a
-// live flight is never evicted, since a second refresh could reuse a rotated token and
-// revoke the session. One spammer can only lock out itself.
-// ponytail: per-IP in-flight cap only; a many-IP flood needs an edge rate limit
-// (Cloudflare rule on /auth/* and /generate*), which is the place to add one.
-const MAX_REFRESHES_PER_CLIENT = 5;
-const refreshesByClient = new Map<string, number>();
-
-// Behind Cloudflare Tunnel the origin is loopback-only, so this header is set by Cloudflare.
-function clientKey(c: Context): string {
-	return c.req.header("cf-connecting-ip") ?? "direct";
 }
 
 function isHttps(c: Context): boolean {
@@ -124,6 +119,7 @@ function saveTokens(c: Context, tokens: TokenResponse, prev: Meta & { refreshTok
 	};
 	const refreshToken = tokens.refresh_token ?? prev.refreshToken;
 	if (!refreshToken) throw new AuthError("Token response has no refresh token");
+	meta.sig = sign(tokens.access_token, refreshToken, meta);
 	setCookie(c, AT, tokens.access_token, cookieOpts(c, REFRESH_MAX_AGE));
 	setCookie(c, RT, refreshToken, cookieOpts(c, REFRESH_MAX_AGE));
 	setCookie(c, META, Buffer.from(JSON.stringify(meta)).toString("base64url"), cookieOpts(c, REFRESH_MAX_AGE));
@@ -140,13 +136,35 @@ function parseEarliest(value: TokenResponse["earliest_refresh_at"]) {
 	return Number.isFinite(ms) ? ms : undefined;
 }
 
-function readMeta(raw: string | undefined): Meta | undefined {
-	if (!raw) return undefined;
+function sign(accessToken: string, refreshToken: string, meta: Meta): string {
+	const { sig: _, ...fields } = meta;
+	return createHmac("sha256", getHost().cookieKey)
+		.update(JSON.stringify([accessToken, refreshToken, fields]))
+		.digest("base64url");
+}
+
+interface Session {
+	accessToken: string;
+	refreshToken: string;
+	meta: Meta;
+}
+
+/** The session in these cookies, only if this server issued it. */
+function readSession(cookie: (name: string) => string | undefined): Session | undefined {
+	const accessToken = cookie(AT);
+	const refreshToken = cookie(RT);
+	const raw = cookie(META);
+	if (!accessToken || !refreshToken || !raw) return undefined;
+	let meta: Meta;
 	try {
-		return JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Meta;
+		meta = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Meta;
 	} catch {
 		return undefined;
 	}
+	const expected = Buffer.from(sign(accessToken, refreshToken, meta));
+	const given = Buffer.from(meta.sig ?? "");
+	if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
+	return { accessToken, refreshToken, meta };
 }
 
 async function tokenRequest(body: Record<string, string>): Promise<TokenResponse> {
@@ -174,7 +192,7 @@ export function beginLogin(c: Context): string {
 	const state = b64url(randomBytes(24));
 	const nonce = b64url(randomBytes(24));
 	// Reuse this browser's issued client ID; first sign-in registers through the dynamic entrypoint.
-	const clientId = readMeta(getCookie(c, META))?.clientId ?? "dynamic_agent_client";
+	const clientId = readSession((n) => getCookie(c, n))?.meta.clientId ?? "dynamic_agent_client";
 
 	const params = new URLSearchParams({
 		client_id: clientId,
@@ -189,7 +207,7 @@ export function beginLogin(c: Context): string {
 	});
 	if (clientId === "dynamic_agent_client") {
 		params.set("agent_name_hint", "3Roads");
-		params.set("ext_agent_host_id", getHostId());
+		params.set("ext_agent_host_id", getHost().hostId);
 	}
 	const pending: Pending = { state, verifier, nonce, clientId };
 	setCookie(c, LOGIN, Buffer.from(JSON.stringify(pending)).toString("base64url"), cookieOpts(c, PENDING_TTL / 1000));
@@ -254,18 +272,18 @@ export async function completeLogin(c: Context, pastedUrl: string): Promise<{ em
 }
 
 // One refresh per refresh token: concurrent requests from the same browser must not
-// both rotate it, or the second use revokes the whole token family.
-const refreshing = new Map<string, Promise<{ tokens: TokenResponse; at: number }>>();
+// both rotate it, or the second use revokes the whole token family. Only signed
+// sessions get here, so the map holds real users' refreshes.
+const refreshing = new Map<string, Promise<TokenResponse>>();
 
 /**
  * This request's ChatGPT access token, refreshed when within `minValidMs` of expiry
  * (rotated tokens go back to the browser as cookies). Returns null when signed out.
  */
 export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promise<string | null> {
-	const accessToken = getCookie(c, AT);
-	const refreshToken = getCookie(c, RT);
-	const meta = readMeta(getCookie(c, META));
-	if (!accessToken || !refreshToken || !meta) return null;
+	const session = readSession((n) => getCookie(c, n));
+	if (!session) return null;
+	const { accessToken, refreshToken, meta } = session;
 
 	const now = Date.now();
 	const due = now > meta.expiresAt - minValidMs;
@@ -274,38 +292,21 @@ export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promi
 
 	let flight = refreshing.get(refreshToken);
 	if (!flight) {
-		const client = clientKey(c);
-		const inFlight = refreshesByClient.get(client) ?? 0;
-		if (inFlight >= MAX_REFRESHES_PER_CLIENT) throw new AuthError("Too many sign-in refreshes from this client");
-		refreshesByClient.set(client, inFlight + 1);
 		flight = tokenRequest({
 			grant_type: "refresh_token",
 			client_id: meta.clientId,
 			refresh_token: refreshToken,
 			resource: RESOURCE,
-		}).then((tokens) => ({ tokens, at: Date.now() }));
+		});
 		refreshing.set(refreshToken, flight);
 		// Keep a success briefly so requests already in flight with the old cookie reuse it.
-		// Failures (e.g. made-up tokens) leave at once, so they can't fill the map.
-		const release = () => {
-			const n = (refreshesByClient.get(client) ?? 1) - 1;
-			if (n > 0) refreshesByClient.set(client, n);
-			else refreshesByClient.delete(client);
-		};
 		flight.then(
-			() => {
-				release();
-				setTimeout(() => refreshing.delete(refreshToken), 60_000).unref();
-			},
-			() => {
-				release();
-				refreshing.delete(refreshToken);
-			},
+			() => setTimeout(() => refreshing.delete(refreshToken), 60_000).unref(),
+			() => refreshing.delete(refreshToken),
 		);
 	}
 	try {
-		const { tokens } = await flight;
-		return saveTokens(c, tokens, { ...meta, refreshToken }).accessToken;
+		return saveTokens(c, await flight, { ...meta, refreshToken }).accessToken;
 	} catch (err) {
 		if (err instanceof AuthError && UNUSABLE_REFRESH.has(err.code ?? "")) {
 			log.warn(`getAccessToken — refresh rejected (${err.code}), signing out`);
@@ -319,15 +320,15 @@ export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promi
 export async function status(c: Context, minValidMs?: number) {
 	const token = await getAccessToken(c, minValidMs);
 	if (!token) return { signedIn: false as const };
-	const meta = readMeta(getCookie(c, META));
+	const meta = readSession((n) => getCookie(c, n))?.meta;
 	return { signedIn: true as const, email: meta?.email, expiresAt: meta?.expiresAt };
 }
 
 export async function logout(c: Context): Promise<void> {
-	const refreshToken = getCookie(c, RT);
-	const meta = readMeta(getCookie(c, META));
+	const session = readSession((n) => getCookie(c, n));
 	clearTokens(c);
-	if (refreshToken && meta) {
+	if (session) {
+		const { refreshToken, meta } = session;
 		// Best effort: the browser's cookies are already gone.
 		await fetch(revokeUrl, {
 			method: "POST",
@@ -347,7 +348,6 @@ export function accessTokenFromCookieHeader(header: string | undefined): { token
 			return [part.slice(0, i).trim(), decodeURIComponent(part.slice(i + 1).trim())] as const;
 		}),
 	);
-	const token = cookies.get(AT);
-	const meta = readMeta(cookies.get(META));
-	return token && meta ? { token, expiresAt: meta.expiresAt } : null;
+	const session = readSession((n) => cookies.get(n));
+	return session ? { token: session.accessToken, expiresAt: session.meta.expiresAt } : null;
 }

@@ -87,68 +87,61 @@ test("sign-in: pasted callback is bound to the starting browser and lands tokens
 	assert.equal(jar.get("cg_rt"), "rt-1");
 });
 
-test("refresh: concurrent requests with an expiring token rotate the refresh token once", async (t) => {
+/** Runs a full sign-in against a fake token endpoint and returns the session cookies. */
+async function signIn(): Promise<Map<string, string>> {
+	let nonce = "";
+	globalThis.fetch = (async () =>
+		Response.json({
+			access_token: "at-1",
+			refresh_token: "rt-1",
+			id_token: `x.${b64({ nonce, aud: "oaiapp_123" })}.sig`,
+			expires_in: 3600,
+			scope: "chatgpt.tokens.use.direct",
+		})) as typeof fetch;
+	const start = await authRoutes.request("/chatgpt/start", { method: "POST" });
+	const url = new URL(((await start.json()) as { url: string }).url);
+	nonce = url.searchParams.get("nonce") ?? "";
+	const done = await authRoutes.request("/chatgpt/complete", {
+		method: "POST",
+		headers: { "content-type": "application/json", cookie: cookieHeader(cookiesFrom(start)) },
+		body: JSON.stringify({
+			url: `http://127.0.0.1:1455/auth/callback?code=c&state=${url.searchParams.get("state")}&client_id=oaiapp_123`,
+		}),
+	});
+	assert.equal(done.status, 200);
+	return cookiesFrom(done);
+}
+
+test("refresh: one rotation for concurrent requests, and unsigned cookies never reach OpenAI", async (t) => {
+	t.after(() => {
+		globalThis.fetch = realFetch;
+	});
+	const jar = await signIn();
+	// Force a refresh by asking for more validity than the token has left.
+	const app = new Hono().get("/", async (c) => c.text((await getAccessToken(c, 2 * 3600_000)) ?? "none"));
+
 	let refreshes = 0;
 	globalThis.fetch = (async () => {
 		refreshes++;
 		await new Promise((r) => setTimeout(r, 20));
 		return Response.json({ access_token: "at-2", refresh_token: "rt-2", expires_in: 3600 });
 	}) as typeof fetch;
-	t.after(() => {
-		globalThis.fetch = realFetch;
-	});
-
-	const app = new Hono().get("/", async (c) => c.text((await getAccessToken(c)) ?? "none"));
-	const cookie = `cg_at=at-1; cg_rt=rt-shared; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: Date.now() + 1000 })}`;
+	const cookie = cookieHeader(jar);
 	const results = await Promise.all([1, 2, 3].map(() => app.request("/", { headers: { cookie } })));
 	assert.deepEqual(await Promise.all(results.map((r) => r.text())), ["at-2", "at-2", "at-2"]);
 	assert.equal(refreshes, 1);
 	assert.equal(cookiesFrom(results[0]).get("cg_rt"), "rt-2");
 
-	const signedOut = await app.request("/");
-	assert.equal(await signedOut.text(), "none");
-
-	// Made-up refresh tokens fail and leave the flight map at once instead of filling it.
-	globalThis.fetch = (async () => Response.json({ error: "invalid_grant" }, { status: 400 })) as typeof fetch;
-	for (let i = 0; i < 5; i++) {
-		const bogus = `cg_at=a; cg_rt=bogus-${i}; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: 0 })}`;
-		const res = await app.request("/", { headers: { cookie: bogus } });
+	// Made-up, tampered or swapped cookies are treated as signed out with no outbound request.
+	refreshes = 0;
+	const forged = new Map(jar);
+	forged.set("cg_rt", "attacker-token");
+	const unsigned = `cg_at=a; cg_rt=r; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: 0 })}`;
+	for (const bad of [cookieHeader(forged), unsigned, ""]) {
+		const res = await app.request("/", { headers: { cookie: bad } });
 		assert.equal(await res.text(), "none");
 	}
-	// A client flooding slow refreshes is capped without blocking other clients.
-	let release: () => void = () => {};
-	globalThis.fetch = (() =>
-		new Promise<Response>((resolve) => {
-			const prev = release;
-			release = () => {
-				prev();
-				resolve(Response.json({ error: "invalid_grant" }, { status: 400 }));
-			};
-		})) as typeof fetch;
-	const flood = Array.from({ length: 8 }, (_, i) =>
-		app.request("/", {
-			headers: {
-				"cf-connecting-ip": "203.0.113.9",
-				cookie: `cg_at=a; cg_rt=slow-${i}; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: 0 })}`,
-			},
-		}),
-	);
-	await new Promise((r) => setTimeout(r, 10));
-	const other = app.request("/", {
-		headers: {
-			"cf-connecting-ip": "198.51.100.1",
-			cookie: `cg_at=a; cg_rt=other; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: 0 })}`,
-		},
-	});
-	await new Promise((r) => setTimeout(r, 10));
-	release();
-	const floodResults = await Promise.all(flood.map(async (r) => (await r).status));
-	assert.equal(floodResults.filter((st) => st === 500).length, 3, "3 of 8 refused past the per-client cap");
-	assert.equal((await other).status, 200, "another client still refreshes");
-
-	globalThis.fetch = (async () => Response.json({ error: "invalid_grant" }, { status: 400 })) as typeof fetch;
-	const fresh = `cg_at=at-9; cg_rt=rt-9; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: Date.now() + 3_600_000 })}`;
-	assert.equal(await (await app.request("/", { headers: { cookie: fresh } })).text(), "at-9");
+	assert.equal(refreshes, 0);
 });
 
 test("responses: plan-usage request shape and tool-call stream parsing", async () => {

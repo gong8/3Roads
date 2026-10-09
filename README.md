@@ -92,7 +92,7 @@ user pastes the address their browser lands on back into 3Roads (top right of th
 |----------|---------|---------|
 | `OPENAI_MODEL` | `gpt-5.4` | Default generation model |
 | `OPENAI_JUDGE_MODEL` | `OPENAI_MODEL` | Model for ambiguous answer judging |
-| `CHATGPT_HOST_FILE` | `data/chatgpt-host.json` | Stable, non-secret install ID OpenAI asks for; must be writable |
+| `CHATGPT_HOST_FILE` | `data/chatgpt-host.json` | Created on first use (mode 600): the install ID OpenAI asks for, plus a random local key that signs session cookies. Must be writable and persistent; deleting it signs everyone out |
 
 The API needs outbound HTTPS to `auth.openai.com` and `api.openai.com`, and the MCP server
 (`MCP_URL`, default `http://127.0.0.1:7002/mcp`) for saving generated questions.
