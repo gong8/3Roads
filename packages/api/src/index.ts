@@ -1,3 +1,4 @@
+import "./load-env.js";
 import { createServer } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";

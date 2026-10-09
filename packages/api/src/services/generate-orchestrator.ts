@@ -1,5 +1,5 @@
 import { createLogger, getDb } from "@3roads/shared";
-import { runCliChat, runCliChatSimple } from "./cli-chat.js";
+import { runLlmChat, runLlmChatSimple } from "./llm-chat.js";
 
 const log = createLogger("api:orchestrator");
 
@@ -168,10 +168,9 @@ Output ONLY a JSON array, no markdown. Example:
 
 		let topics: PictureTopic[];
 		try {
-			const raw = await runCliChatSimple({
+			const raw = await runLlmChatSimple({
 				prompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
-				model: "haiku",
 			});
 			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
 			const parsed = JSON.parse(cleaned) as PictureTopic[];
@@ -252,10 +251,9 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		const tasks: Promise<unknown>[] = [];
 
 		if (writtenTossupCount > 0 || bonusCount > 0) {
-			const planResult = await runCliChatSimple({
+			const planResult = await runLlmChatSimple({
 				prompt: planPrompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
-				model: "haiku",
 			});
 
 			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
@@ -279,10 +277,10 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 				const tossupPrompt = `Write ${writtenTossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — refer to the subject only as 'this person', 'this country', 'this work', 'this element', etc. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
 
 				tasks.push(
-					runCliChat({
+					runLlmChat({
 						prompt: tossupPrompt,
 						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
-						model: model || "haiku",
+						model,
 					}),
 				);
 			}
@@ -292,10 +290,10 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 				const bonusPrompt = `Write ${bonusCount} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
 
 				tasks.push(
-					runCliChat({
+					runLlmChat({
 						prompt: bonusPrompt,
 						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
-						model: model || "haiku",
+						model,
 					}),
 				);
 			}

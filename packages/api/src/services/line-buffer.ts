@@ -1,6 +1,6 @@
 /**
  * Buffers incoming text chunks and yields complete newline-delimited lines.
- * Shared by cli-chat (stdout parsing) and stream-manager (SSE parsing).
+ * Shared by llm-chat (OpenRouter SSE parsing) and stream-manager (SSE parsing).
  */
 export class LineBuffer {
 	private buffer = "";

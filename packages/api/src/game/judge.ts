@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import { createLogger } from "@3roads/shared";
 
 const log = createLogger("api:game:judge");
@@ -54,7 +53,7 @@ function normalize(answer: string): string {
 /**
  * Very strict local judge. Only accepts exact normalized matches
  * (case-insensitive, stripped articles/punctuation). Everything else
- * goes to Claude Haiku.
+ * goes to the LLM.
  */
 function localJudge(
 	submitted: string,
@@ -121,9 +120,7 @@ export async function judgeAnswer(
 	].join("\n");
 
 	try {
-		const result = ANTHROPIC_API_KEY
-			? await fetchJudge(systemPrompt, userPrompt)
-			: await spawnJudge(`${systemPrompt}\n${userPrompt}\nRespond with ONLY "correct" or "incorrect".`);
+		const result = await fetchJudge(systemPrompt, userPrompt);
 		const correct = result.trim().toLowerCase().includes("correct") &&
 			!result.trim().toLowerCase().startsWith("incorrect");
 		log.info(`judge [llm] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${correct ? "correct" : "incorrect"}`);
@@ -134,95 +131,40 @@ export async function judgeAnswer(
 	}
 }
 
-// -- LLM backends --
+// -- LLM backend --
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_JUDGE_MODEL || "claude-haiku-4-5-20251001";
+const OPENROUTER_JUDGE_MODEL =
+	process.env.OPENROUTER_JUDGE_MODEL || process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3";
 
-if (ANTHROPIC_API_KEY) {
-	log.info(`Judge LLM backend: direct API (model=${ANTHROPIC_MODEL})`);
-} else {
-	log.info("Judge LLM backend: CLI spawn (no ANTHROPIC_API_KEY set)");
-}
+log.info(`Judge LLM backend: OpenRouter (model=${OPENROUTER_JUDGE_MODEL})`);
 
-/** Fast path: direct Anthropic Messages API call (~200-500ms). */
 async function fetchJudge(systemPrompt: string, userPrompt: string): Promise<string> {
-	const res = await fetch("https://api.anthropic.com/v1/messages", {
+	const apiKey = process.env.OPENROUTER_API_KEY;
+	if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
+
+	const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
-			"x-api-key": ANTHROPIC_API_KEY,
-			"anthropic-version": "2023-06-01",
-			"anthropic-beta": "prompt-caching-2024-07-31",
+			Authorization: `Bearer ${apiKey}`,
+			"X-Title": "3Roads",
 		},
 		body: JSON.stringify({
-			model: ANTHROPIC_MODEL,
+			model: OPENROUTER_JUDGE_MODEL,
 			max_tokens: 16,
-			system: [{ type: "text", text: systemPrompt, cache_control: { type: "ephemeral" } }],
-			messages: [{ role: "user", content: userPrompt }],
+			messages: [
+				{ role: "system", content: systemPrompt },
+				{ role: "user", content: userPrompt },
+			],
 		}),
 		signal: AbortSignal.timeout(10000),
 	});
 
 	if (!res.ok) {
 		const body = await res.text().catch(() => "");
-		throw new Error(`Anthropic API ${res.status}: ${body.slice(0, 200)}`);
+		throw new Error(`OpenRouter ${res.status}: ${body.slice(0, 200)}`);
 	}
 
-	const data = await res.json() as { content: { type: string; text: string }[] };
-	return data.content?.[0]?.text ?? "";
+	const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+	return data.choices?.[0]?.message?.content ?? "";
 }
-
-/** Slow path: spawn claude CLI process (~1-2s). */
-function spawnJudge(prompt: string): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const args = [
-			"--print",
-			"--model",
-			"haiku",
-			"--max-turns",
-			"1",
-			"--no-session-persistence",
-			"--setting-sources",
-			"",
-			prompt,
-		];
-
-		const proc = spawn("claude", args, {
-			env: { ...process.env },
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-
-		let stdout = "";
-		let stderr = "";
-
-		proc.stdout.on("data", (chunk: Buffer) => {
-			stdout += chunk.toString();
-		});
-		proc.stderr.on("data", (chunk: Buffer) => {
-			stderr += chunk.toString();
-		});
-
-		const timeout = setTimeout(() => {
-			proc.kill("SIGTERM");
-			reject(new Error("Judge timed out after 30s"));
-		}, 30000);
-
-		proc.on("close", (code) => {
-			clearTimeout(timeout);
-			if (code !== 0 && !stdout.trim()) {
-				reject(new Error(`Judge exited with code ${code}: ${stderr.slice(0, 200)}`));
-			} else {
-				resolve(stdout);
-			}
-		});
-
-		proc.on("error", (err) => {
-			clearTimeout(timeout);
-			reject(err);
-		});
-
-		proc.stdin.end();
-	});
-}
-

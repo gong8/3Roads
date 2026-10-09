@@ -2,7 +2,7 @@ import { createLogger, getDb } from "@3roads/shared";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { streamCliChat } from "../services/cli-chat.js";
+import { streamLlmChat } from "../services/llm-chat.js";
 import { runGeneration } from "../services/generate-orchestrator.js";
 import { startStream, subscribe } from "../services/stream-manager.js";
 
@@ -130,10 +130,10 @@ Each bonus has:
 
 		log.info(`POST /generate/stream — setting up CLI stream for set ${set.id}`);
 
-		const cliStream = streamCliChat({
+		const cliStream = streamLlmChat({
 			prompt,
 			systemPrompt,
-			model: body.model || "haiku",
+			model: body.model,
 		});
 
 		startStream(set.id, cliStream);
@@ -232,7 +232,7 @@ generateRoutes.post("/", async (c) => {
 			tossupCount: body.tossupCount || 0,
 			bonusCount: body.bonusCount || 0,
 			pictureCount: body.pictureCount || 0,
-			model: body.model || "haiku",
+			model: body.model,
 		}).catch((err) => {
 			log.error(`POST /generate — background generation failed for ${set.id}: ${err}`);
 		});

@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { createLogger } from "@3roads/shared";
-import { runCliChatSimple } from "../services/cli-chat.js";
+import { runLlmChatSimple } from "../services/llm-chat.js";
 import type { TossupData } from "../game/types.js";
 
 const log = createLogger("api:picture-rounds");
@@ -62,10 +62,9 @@ Output ONLY a JSON array of strings, no markdown, no extra text. Example: ["Albe
 
 	let topics: string[];
 	try {
-		const raw = await runCliChatSimple({
+		const raw = await runLlmChatSimple({
 			prompt,
 			systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
-			model: "haiku",
 		});
 		// Strip markdown fences if present
 		const cleaned = raw.replace(/```[a-z]*\n?/g, "").trim();
