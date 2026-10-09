@@ -131,9 +131,9 @@ async function generatePictureTossups(params: {
 	count: number;
 	theme: string;
 	difficulty: string;
-	onCost?: (usd: number) => void;
+	token: string;
 }): Promise<void> {
-	const { setId, count, theme, difficulty, onCost } = params;
+	const { setId, count, theme, difficulty, token } = params;
 	const db = getDb();
 
 	const MAX_ATTEMPTS = 3;
@@ -181,7 +181,7 @@ Output ONLY a JSON array, no markdown. Example:
 			const raw = await runLlmChatSimple({
 				prompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
-				onCost,
+				token,
 			});
 			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
 			const parsed = JSON.parse(cleaned) as PictureTopic[];
@@ -235,16 +235,13 @@ export async function runGeneration(params: {
 	bonusCount: number;
 	pictureCount?: number;
 	model?: string;
+	/** The requesting user's ChatGPT access token, held in memory for this run only. */
+	token: string;
 }): Promise<void> {
-	const { setId, theme, difficulty, tossupCount, bonusCount, pictureCount = 0, model } = params;
+	const { setId, theme, difficulty, tossupCount, bonusCount, pictureCount = 0, model, token } = params;
 	// Picture questions are drawn from the tossup budget; written tossups fill the remainder
 	const writtenTossupCount = Math.max(0, tossupCount - pictureCount);
 	const db = getDb();
-	// Total OpenRouter spend across every LLM call for this set
-	let cost = 0;
-	const onCost = (usd: number) => {
-		cost += usd;
-	};
 
 	try {
 		await db.questionSet.update({
@@ -270,7 +267,8 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 			const planResult = await runLlmChatSimple({
 				prompt: planPrompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
-				onCost,
+				model,
+				token,
 			});
 
 			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
@@ -298,7 +296,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						prompt: tossupPrompt,
 						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
 						model,
-						onCost,
+						token,
 					}),
 				);
 			}
@@ -312,7 +310,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						prompt: bonusPrompt,
 						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
 						model,
-						onCost,
+						token,
 					}),
 				);
 			}
@@ -321,7 +319,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		// Picture tossups run in parallel with regular generation
 		if (pictureCount > 0) {
 			tasks.push(
-				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, onCost }),
+				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, token }),
 			);
 		}
 
@@ -338,15 +336,15 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		if (errors.length > 0) {
 			log.error(`[${setId}] Phase 2 errors: ${errors.join("; ")}`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
+			await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
 		} else {
-			log.info(`[${setId}] Generation complete — cost=$${cost.toFixed(4)}`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "complete", cost } });
+			log.info(`[${setId}] Generation complete`);
+			await db.questionSet.update({ where: { id: setId }, data: { status: "complete" } });
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		log.error(`[${setId}] Generation failed: ${msg}`);
-		await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
+		await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
 	}
 
 	// Clean up sets that ended up with no questions at all

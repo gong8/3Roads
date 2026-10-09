@@ -24,7 +24,8 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   });
   console.log("[3roads:api]", "POST", url, "->", res.status);
   if (!res.ok) {
-    const errMsg = `API error ${res.status}`;
+    const serverMsg = await res.json().then((b: { error?: string }) => b.error).catch(() => undefined);
+    const errMsg = serverMsg ?? `API error ${res.status}`;
     console.error("[3roads:api]", "POST", url, "FAILED:", res.status, res.statusText);
     throw new Error(errMsg);
   }

@@ -1,17 +1,24 @@
 import { createLogger } from "@3roads/shared";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { RESOURCE } from "./chatgpt-auth.js";
 import { LineBuffer } from "./line-buffer.js";
+
+// Inference runs on the signed-in user's ChatGPT plan through the Responses API.
+// Requests follow the plan-usage rules: store:false, stream:true, instructions
+// instead of system messages, tools in a namespace, no sampling/limit fields.
+// https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations
 
 const log = createLogger("api:llm");
 
 const MCP_URL = process.env.MCP_URL || "http://127.0.0.1:7002/mcp";
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
-const OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3-contributor";
+const RESPONSES_URL = `${RESOURCE}/responses`;
+export const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-5.4";
 const MAX_TURNS = 10;
 
 // Tools are exposed to the model with the same names the prompts (and web UI) already use
 const TOOL_PREFIX = "mcp__3roads__";
+const TOOL_NAMESPACE = "threeroads";
 const ALLOWED_MCP_TOOLS = new Set(["save_tossups_batch", "save_bonuses_batch"]);
 
 const SYSTEM_PROMPT_SUFFIX = [
@@ -26,130 +33,130 @@ const SYSTEM_PROMPT_SUFFIX = [
 	"- In tossups, every sentence must refer to the answer with a 'this <type>' phrase (e.g. 'this food', 'this author'), and the first sentence must not reveal the answer's namesake, word origin, or most famous fact.",
 ].join("\n");
 
-function getApiKey(): string {
-	const key = process.env.OPENROUTER_API_KEY;
-	if (!key) throw new Error("OPENROUTER_API_KEY is not set");
-	return key;
-}
-
-/**
- * Callers still pass legacy names like "haiku"/"opus"; anything that isn't an
- * OpenRouter slug ("vendor/model") resolves to the configured default.
- */
+/** Model slugs come from listModels; old OpenRouter slugs ("vendor/model") use the default. */
 function resolveModel(model?: string): string {
-	return model?.includes("/") ? model : OPENROUTER_MODEL;
+	return model && !model.includes("/") ? model : DEFAULT_MODEL;
 }
 
 type SSEEmitter = (event: string, data: string) => void;
 
-interface ChatMessage {
-	role: "system" | "user" | "assistant" | "tool";
-	content: string | null;
-	tool_calls?: ToolCall[];
-	tool_call_id?: string;
+type InputItem =
+	| { role: "user"; content: string }
+	| { type: "function_call"; call_id: string; name: string; arguments: string }
+	| { type: "function_call_output"; call_id: string; output: string };
+
+interface FunctionCall {
+	call_id: string;
+	name: string;
+	arguments: string;
 }
 
-interface ToolCall {
-	id: string;
-	type: "function";
-	function: { name: string; arguments: string };
+interface NamespaceTool {
+	type: "namespace";
+	name: string;
+	description: string;
+	tools: { type: "function"; name: string; description?: string; parameters: unknown }[];
 }
 
-interface OpenAiTool {
-	type: "function";
-	function: { name: string; description?: string; parameters: unknown };
+/** Error from the ChatGPT plan route, with OpenAI's error code when it gave one. */
+export class LlmError extends Error {
+	constructor(
+		message: string,
+		readonly code?: string,
+	) {
+		super(message);
+	}
 }
 
 // -- MCP --
 
-async function connectMcp(): Promise<{ client: Client; tools: OpenAiTool[] }> {
+async function connectMcp(): Promise<{ client: Client; tools: NamespaceTool[] }> {
 	const client = new Client({ name: "3roads-api", version: "0.0.1" });
 	await client.connect(new StreamableHTTPClientTransport(new URL(MCP_URL)));
 	const { tools } = await client.listTools();
-	const openAiTools = tools
+	const fns = tools
 		.filter((t) => ALLOWED_MCP_TOOLS.has(t.name))
 		.map((t) => ({
 			type: "function" as const,
-			function: {
-				name: TOOL_PREFIX + t.name,
-				description: t.description,
-				parameters: t.inputSchema,
-			},
+			name: TOOL_PREFIX + t.name,
+			description: t.description,
+			parameters: t.inputSchema,
 		}));
-	log.debug(`connectMcp — ${openAiTools.length} tools from ${MCP_URL}`);
-	return { client, tools: openAiTools };
+	log.debug(`connectMcp — ${fns.length} tools from ${MCP_URL}`);
+	return {
+		client,
+		tools: [{ type: "namespace", name: TOOL_NAMESPACE, description: "Save quiz bowl questions.", tools: fns }],
+	};
 }
 
-async function callMcpTool(
-	client: Client,
-	tc: ToolCall,
-): Promise<{ text: string; isError: boolean }> {
-	const name = tc.function.name.replace(TOOL_PREFIX, "");
+async function callMcpTool(client: Client, call: FunctionCall): Promise<{ text: string; isError: boolean }> {
+	const name = call.name.replace(TOOL_PREFIX, "");
 	if (!ALLOWED_MCP_TOOLS.has(name)) {
-		return { text: `Error: tool ${tc.function.name} is not available`, isError: true };
+		return { text: `Error: tool ${call.name} is not available`, isError: true };
 	}
 	let args: Record<string, unknown>;
 	try {
-		args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+		args = call.arguments ? JSON.parse(call.arguments) : {};
 	} catch (err) {
-		return {
-			text: `Error: invalid JSON arguments: ${err instanceof Error ? err.message : err}`,
-			isError: true,
-		};
+		return { text: `Error: invalid JSON arguments: ${err instanceof Error ? err.message : err}`, isError: true };
 	}
 	try {
 		const result = await client.callTool({ name, arguments: args });
 		const content = (result.content ?? []) as Array<{ type: string; text?: string }>;
-		return {
-			text: content.map((c) => c.text ?? "").join(""),
-			isError: result.isError === true,
-		};
+		return { text: content.map((c) => c.text ?? "").join(""), isError: result.isError === true };
 	} catch (err) {
 		return { text: `Error: ${err instanceof Error ? err.message : err}`, isError: true };
 	}
 }
 
-// -- OpenRouter streaming completion --
+// -- Responses streaming --
 
-interface CompletionResult {
-	content: string;
-	toolCalls: ToolCall[];
-	cost: number;
-}
+export async function streamResponse(options: {
+	token: string;
+	model: string;
+	instructions: string;
+	input: InputItem[];
+	tools: NamespaceTool[];
+	emit?: SSEEmitter;
+	signal?: AbortSignal;
+	fetch?: typeof fetch;
+}): Promise<{ content: string; calls: FunctionCall[] }> {
+	const http = options.fetch ?? fetch;
+	const body = {
+		model: options.model,
+		instructions: options.instructions,
+		input: options.input,
+		store: false,
+		stream: true,
+		...(options.tools.length > 0 ? { tools: options.tools } : {}),
+	};
 
-async function streamCompletion(
-	model: string,
-	messages: ChatMessage[],
-	tools: OpenAiTool[],
-	emit: SSEEmitter | undefined,
-	signal?: AbortSignal,
-): Promise<CompletionResult> {
-	const res = await fetch(OPENROUTER_URL, {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${getApiKey()}`,
-			"X-Title": "3Roads",
-		},
-		body: JSON.stringify({
-			model,
-			messages,
-			stream: true,
-			usage: { include: true },
-			...(tools.length > 0 ? { tools } : {}),
-		}),
-		signal,
-	});
+	// Only temporary routing outages are retried. Quota (429) never is.
+	let res: Response;
+	for (let attempt = 0; ; attempt++) {
+		res = await http(RESPONSES_URL, {
+			method: "POST",
+			headers: { "Content-Type": "application/json", Authorization: `Bearer ${options.token}` },
+			body: JSON.stringify(body),
+			signal: options.signal,
+		});
+		if (res.status !== 503 || attempt >= 2) break;
+		await res.body?.cancel();
+		await new Promise((r) => setTimeout(r, 1000 * 3 ** attempt));
+	}
 
 	if (!res.ok || !res.body) {
-		const body = await res.text().catch(() => "");
-		throw new Error(`OpenRouter ${res.status}: ${body.slice(0, 300)}`);
+		const text = await res.text().catch(() => "");
+		let code: string | undefined;
+		try {
+			code = (JSON.parse(text) as { error?: { code?: string } }).error?.code;
+		} catch {}
+		throw new LlmError(`OpenAI ${res.status}${code ? ` (${code})` : ""}: ${text.slice(0, 300)}`, code);
 	}
 
 	let content = "";
-	let cost = 0;
-	let thinking = false;
-	const toolCalls = new Map<number, ToolCall>();
+	let completed = false;
+	const calls: FunctionCall[] = [];
 	const lineBuffer = new LineBuffer();
 	const decoder = new TextDecoder();
 
@@ -157,147 +164,128 @@ async function streamCompletion(
 		for (const line of lineBuffer.push(decoder.decode(chunk, { stream: true }))) {
 			const trimmed = line.trim();
 			if (!trimmed.startsWith("data:")) continue;
-			const payload = trimmed.slice(5).trim();
-			if (payload === "[DONE]") continue;
-
 			let msg: Record<string, any>;
 			try {
-				msg = JSON.parse(payload);
+				msg = JSON.parse(trimmed.slice(5).trim());
 			} catch {
 				continue;
 			}
-			if (msg.error) throw new Error(`OpenRouter: ${msg.error.message ?? JSON.stringify(msg.error)}`);
-			if (typeof msg.usage?.cost === "number") cost += msg.usage.cost;
 
-			const delta = msg.choices?.[0]?.delta;
-			if (!delta) continue;
-
-			if (delta.reasoning) {
-				if (!thinking) {
-					thinking = true;
-					emit?.("thinking_start", JSON.stringify({}));
+			switch (msg.type) {
+				case "response.output_text.delta":
+					content += msg.delta;
+					options.emit?.("content", JSON.stringify({ content: msg.delta }));
+					break;
+				case "response.output_item.added":
+					if (msg.item?.type === "function_call") {
+						log.info(`streamResponse — tool_call_start: ${msg.item.name} (${msg.item.call_id})`);
+						options.emit?.(
+							"tool_call_start",
+							JSON.stringify({ toolCallId: msg.item.call_id, toolName: msg.item.name }),
+						);
+					}
+					break;
+				case "response.output_item.done":
+					if (msg.item?.type === "function_call") {
+						calls.push({ call_id: msg.item.call_id, name: msg.item.name, arguments: msg.item.arguments ?? "" });
+					}
+					break;
+				case "response.completed":
+					completed = true;
+					break;
+				case "response.failed":
+				case "response.incomplete":
+				case "error": {
+					const err = msg.response?.error ?? msg.error ?? msg;
+					throw new LlmError(`OpenAI ${msg.type}: ${err.message ?? JSON.stringify(err).slice(0, 300)}`, err.code);
 				}
-				emit?.("thinking_delta", JSON.stringify({ text: delta.reasoning }));
-			}
-			if (delta.content) {
-				content += delta.content;
-				emit?.("content", JSON.stringify({ content: delta.content }));
-			}
-			for (const d of delta.tool_calls ?? []) {
-				const index = d.index ?? 0;
-				let tc = toolCalls.get(index);
-				if (!tc) {
-					tc = {
-						id: d.id || `tool_${index}`,
-						type: "function",
-						function: { name: d.function?.name ?? "", arguments: "" },
-					};
-					toolCalls.set(index, tc);
-					log.info(`streamCompletion — tool_call_start: ${tc.function.name} (${tc.id})`);
-					emit?.(
-						"tool_call_start",
-						JSON.stringify({ toolCallId: tc.id, toolName: tc.function.name }),
-					);
-				}
-				if (d.function?.arguments) tc.function.arguments += d.function.arguments;
 			}
 		}
 	}
 
-	return { content, toolCalls: [...toolCalls.values()], cost };
+	// response.completed is the only success signal; a stream can just stop.
+	if (!completed) throw new LlmError("OpenAI stream ended before response.completed");
+	return { content, calls };
 }
 
 // -- Agent loop --
 
 async function runAgentLoop(options: {
+	token: string;
 	prompt: string;
 	systemPrompt: string;
 	model?: string;
 	signal?: AbortSignal;
 	emit?: SSEEmitter;
 	useTools: boolean;
-	/** Called with each completion's USD cost as it's incurred, so failed runs are still counted. */
-	onCost?: (usd: number) => void;
-}): Promise<{ result: string; cost: number }> {
+}): Promise<string> {
 	const model = resolveModel(options.model);
 	const startMs = performance.now();
 	log.info(`runAgentLoop START — model=${model} tools=${options.useTools} prompt=${options.prompt.length} chars`);
 
 	const mcp = options.useTools ? await connectMcp() : undefined;
-	const messages: ChatMessage[] = [
-		{ role: "system", content: options.systemPrompt },
-		{ role: "user", content: options.prompt },
-	];
-	let totalCost = 0;
+	// store:false means no server-side history: every turn resends the whole conversation.
+	const input: InputItem[] = [{ role: "user", content: options.prompt }];
 	let lastContent = "";
 
 	try {
 		for (let turn = 1; turn <= MAX_TURNS; turn++) {
-			const { content, toolCalls, cost } = await streamCompletion(
+			const { content, calls } = await streamResponse({
+				token: options.token,
 				model,
-				messages,
-				mcp?.tools ?? [],
-				options.emit,
-				options.signal,
-			);
-			totalCost += cost;
-			options.onCost?.(cost);
+				instructions: options.systemPrompt,
+				input,
+				tools: mcp?.tools ?? [],
+				emit: options.emit,
+				signal: options.signal,
+			});
 			lastContent = content;
 
-			if (toolCalls.length === 0 || !mcp) break;
+			if (calls.length === 0 || !mcp) break;
 
-			messages.push({ role: "assistant", content: content || null, tool_calls: toolCalls });
-
-			for (const tc of toolCalls) {
+			for (const call of calls) {
 				let args: unknown = {};
 				try {
-					args = tc.function.arguments ? JSON.parse(tc.function.arguments) : {};
+					args = call.arguments ? JSON.parse(call.arguments) : {};
 				} catch {}
-				log.info(`runAgentLoop — tool_call_complete: ${tc.function.name} (${tc.id})`);
-				options.emit?.(
-					"tool_call_args",
-					JSON.stringify({ toolCallId: tc.id, toolName: tc.function.name, args }),
-				);
+				log.info(`runAgentLoop — tool_call_complete: ${call.name} (${call.call_id})`);
+				options.emit?.("tool_call_args", JSON.stringify({ toolCallId: call.call_id, toolName: call.name, args }));
 
-				const { text, isError } = await callMcpTool(mcp.client, tc);
-				if (isError) log.warn(`runAgentLoop — tool ${tc.function.name} error: ${text.slice(0, 300)}`);
-				options.emit?.(
-					"tool_result",
-					JSON.stringify({ toolCallId: tc.id, result: text, isError }),
-				);
-				messages.push({ role: "tool", tool_call_id: tc.id, content: text });
+				const { text, isError } = await callMcpTool(mcp.client, call);
+				if (isError) log.warn(`runAgentLoop — tool ${call.name} error: ${text.slice(0, 300)}`);
+				options.emit?.("tool_result", JSON.stringify({ toolCallId: call.call_id, result: text, isError }));
+				input.push({ type: "function_call", ...call });
+				input.push({ type: "function_call_output", call_id: call.call_id, output: text });
 			}
 		}
 	} finally {
 		await mcp?.client.close().catch(() => {});
 	}
 
-	const elapsed = (performance.now() - startMs).toFixed(0);
-	log.info(`runAgentLoop DONE — ${elapsed}ms, cost=$${totalCost.toFixed(4)}`);
-	return { result: lastContent, cost: totalCost };
+	log.info(`runAgentLoop DONE — ${(performance.now() - startMs).toFixed(0)}ms`);
+	return lastContent;
 }
 
 // -- Public API --
 
 export interface LlmChatOptions {
+	/** The signed-in user's ChatGPT access token. */
+	token: string;
 	prompt: string;
 	systemPrompt: string;
 	model?: string;
 	signal?: AbortSignal;
-	onCost?: (usd: number) => void;
 }
 
 /** Tool-using generation run (saves questions via MCP). */
-export async function runLlmChat(
-	options: LlmChatOptions,
-): Promise<{ ok: boolean; result?: string; error?: string; cost?: number }> {
+export async function runLlmChat(options: LlmChatOptions): Promise<{ ok: boolean; result?: string; error?: string }> {
 	try {
-		const { result, cost } = await runAgentLoop({
+		const result = await runAgentLoop({
 			...options,
 			systemPrompt: options.systemPrompt + SYSTEM_PROMPT_SUFFIX,
 			useTools: true,
 		});
-		return { ok: true, result, cost };
+		return { ok: true, result };
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		log.error(`runLlmChat failed: ${msg}`);
@@ -306,14 +294,8 @@ export async function runLlmChat(
 }
 
 /** Single-turn text completion, no tools. */
-export async function runLlmChatSimple(options: {
-	prompt: string;
-	systemPrompt: string;
-	model?: string;
-	onCost?: (usd: number) => void;
-}): Promise<string> {
-	const { result } = await runAgentLoop({ ...options, useTools: false });
-	return result;
+export function runLlmChatSimple(options: LlmChatOptions): Promise<string> {
+	return runAgentLoop({ ...options, useTools: false });
 }
 
 /** Tool-using generation run streamed as SSE events. */
@@ -342,4 +324,23 @@ export function streamLlmChat(options: LlmChatOptions): ReadableStream<Uint8Arra
 			controller.close();
 		},
 	});
+}
+
+/** Models the signed-in account can use. */
+export async function listModels(token: string): Promise<{ slug: string; name: string }[]> {
+	const res = await fetch(`${RESOURCE}/models`, {
+		headers: { Authorization: `Bearer ${token}` },
+		signal: AbortSignal.timeout(15_000),
+	});
+	if (!res.ok) throw new LlmError(`Model list returned ${res.status}`);
+	const json = (await res.json()) as {
+		models?: { slug: string; display_name?: string; visibility?: string }[];
+		data?: { id: string }[];
+	};
+	if (json.models) {
+		return json.models
+			.filter((m) => m.visibility === "list")
+			.map((m) => ({ slug: m.slug, name: m.display_name ?? m.slug }));
+	}
+	return (json.data ?? []).map((m) => ({ slug: m.id, name: m.id }));
 }

@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { attachGameWebSocket, getActiveRoomsList } from "./game/index.js";
 import { getAudio } from "./game/tts.js";
+import { authRoutes } from "./routes/auth.js";
 import { foldersRoutes } from "./routes/folders.js";
 import { generateRoutes } from "./routes/generate.js";
 import { pictureRoundsRoutes } from "./routes/picture-rounds.js";
@@ -40,6 +41,7 @@ app.onError((err, c) => {
 	return c.json({ error: message }, 500);
 });
 
+app.route("/auth", authRoutes);
 app.route("/generate", generateRoutes);
 app.route("/sets", setsRoutes);
 app.route("/folders", foldersRoutes);

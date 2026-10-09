@@ -1,4 +1,7 @@
 import { createLogger } from "@3roads/shared";
+import type { WebSocket } from "ws";
+import { DEFAULT_MODEL, runLlmChatSimple } from "../services/llm-chat.js";
+import type { GameRoom } from "./types.js";
 
 const log = createLogger("api:game:judge");
 
@@ -94,6 +97,8 @@ export async function judgeAnswer(
 	canonicalAnswer: string,
 	questionText: string,
 	strictness: number,
+	/** A signed-in player's ChatGPT token; without one, ambiguous answers are judged incorrect. */
+	token?: string,
 ): Promise<{ correct: boolean }> {
 	if (!submittedAnswer.trim()) {
 		return { correct: false };
@@ -107,6 +112,10 @@ export async function judgeAnswer(
 	}
 
 	// Slow path: fall back to LLM for ambiguous cases
+	if (!token) {
+		log.info(`judge [local] — submitted="${submittedAnswer}" unsure and nobody in the room is signed in, verdict=incorrect`);
+		return { correct: false };
+	}
 	// Strip bracketed moderator notes (e.g. "[prompt on X]") from canonical before sending to LLM
 	const canonicalForLlm = canonicalAnswer.replace(/\s*\[[^\]]*\]/g, "").trim();
 	log.info(`judge [llm] — local unsure, falling back to LLM for submitted="${submittedAnswer}" canonical="${canonicalForLlm}"`);
@@ -120,7 +129,7 @@ export async function judgeAnswer(
 	].join("\n");
 
 	try {
-		const result = await fetchJudge(systemPrompt, userPrompt);
+		const result = await fetchJudge(token, systemPrompt, userPrompt);
 		const correct = result.trim().toLowerCase().includes("correct") &&
 			!result.trim().toLowerCase().startsWith("incorrect");
 		log.info(`judge [llm] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${correct ? "correct" : "incorrect"}`);
@@ -133,38 +142,32 @@ export async function judgeAnswer(
 
 // -- LLM backend --
 
-const OPENROUTER_JUDGE_MODEL =
-	process.env.OPENROUTER_JUDGE_MODEL || process.env.OPENROUTER_MODEL || "meta/muse-spark-1.3-contributor";
+const JUDGE_MODEL = process.env.OPENAI_JUDGE_MODEL || DEFAULT_MODEL;
 
-log.info(`Judge LLM backend: OpenRouter (model=${OPENROUTER_JUDGE_MODEL})`);
+/** Connected players' ChatGPT access tokens, read from their cookies at WebSocket upgrade. Memory only. */
+export const socketTokens = new WeakMap<WebSocket, { token: string; expiresAt: number }>();
 
-async function fetchJudge(systemPrompt: string, userPrompt: string): Promise<string> {
-	const apiKey = process.env.OPENROUTER_API_KEY;
-	if (!apiKey) throw new Error("OPENROUTER_API_KEY is not set");
-
-	const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-		method: "POST",
-		headers: {
-			"Content-Type": "application/json",
-			Authorization: `Bearer ${apiKey}`,
-			"X-Title": "3Roads",
-		},
-		body: JSON.stringify({
-			model: OPENROUTER_JUDGE_MODEL,
-			max_tokens: 16,
-			messages: [
-				{ role: "system", content: systemPrompt },
-				{ role: "user", content: userPrompt },
-			],
-		}),
-		signal: AbortSignal.timeout(10000),
-	});
-
-	if (!res.ok) {
-		const body = await res.text().catch(() => "");
-		throw new Error(`OpenRouter ${res.status}: ${body.slice(0, 200)}`);
+/**
+ * A usable token for judging in this room: the answering player's, else any other player's.
+ * ponytail: tokens are captured at connect and not refreshed, so after an hour the room
+ * falls back to local judging only; refresh over the socket if long games need the LLM.
+ */
+export function roomToken(room: GameRoom, preferPlayerId?: string): string | undefined {
+	const players = [...room.players.values()];
+	players.sort((a, b) => Number(b.id === preferPlayerId) - Number(a.id === preferPlayerId));
+	for (const p of players) {
+		const t = socketTokens.get(p.ws);
+		if (t && t.expiresAt > Date.now() + 30_000) return t.token;
 	}
+	return undefined;
+}
 
-	const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
-	return data.choices?.[0]?.message?.content ?? "";
+function fetchJudge(token: string, systemPrompt: string, userPrompt: string): Promise<string> {
+	return runLlmChatSimple({
+		token,
+		model: JUDGE_MODEL,
+		systemPrompt,
+		prompt: userPrompt,
+		signal: AbortSignal.timeout(15_000),
+	});
 }

@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx watch src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@3roads/shared": "workspace:*",

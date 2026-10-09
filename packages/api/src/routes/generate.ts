@@ -5,6 +5,7 @@ import { streamSSE } from "hono/streaming";
 import { streamLlmChat } from "../services/llm-chat.js";
 import { runGeneration } from "../services/generate-orchestrator.js";
 import { startStream, subscribe } from "../services/stream-manager.js";
+import { requireToken } from "./auth.js";
 
 const log = createLogger("api:generate");
 
@@ -40,6 +41,9 @@ function pipeStreamToSSE(c: Context, setId: string) {
 
 generateRoutes.post("/stream", async (c) => {
 	log.info("POST /generate/stream — request received");
+
+	const token = await requireToken(c);
+	if (!token) return c.json({ error: "Sign in with ChatGPT to generate questions" }, 401);
 
 	try {
 		const body = await c.req.json<{
@@ -134,6 +138,7 @@ Each bonus has:
 			prompt,
 			systemPrompt,
 			model: body.model,
+			token,
 		});
 
 		startStream(set.id, cliStream);
@@ -196,6 +201,9 @@ Each bonus has:
 generateRoutes.post("/", async (c) => {
 	log.info("POST /generate — request received");
 
+	const token = await requireToken(c);
+	if (!token) return c.json({ error: "Sign in with ChatGPT to generate questions" }, 401);
+
 	try {
 		const body = await c.req.json<{
 			theme: string;
@@ -233,6 +241,7 @@ generateRoutes.post("/", async (c) => {
 			bonusCount: body.bonusCount || 0,
 			pictureCount: body.pictureCount || 0,
 			model: body.model,
+			token,
 		}).catch((err) => {
 			log.error(`POST /generate — background generation failed for ${set.id}: ${err}`);
 		});

@@ -1,6 +1,8 @@
 import type { Server } from "node:http";
 import { createLogger } from "@3roads/shared";
 import { WebSocketServer } from "ws";
+import { accessTokenFromCookieHeader } from "../services/chatgpt-auth.js";
+import { socketTokens } from "./judge.js";
 import { handleConnection } from "./ws-handler.js";
 import { activeRooms } from "./rooms.js";
 
@@ -21,7 +23,9 @@ export function attachGameWebSocket(server: Server): void {
 		}
 	});
 
-	wss.on("connection", (ws) => {
+	wss.on("connection", (ws, request) => {
+		const auth = accessTokenFromCookieHeader(request.headers.cookie);
+		if (auth) socketTokens.set(ws, auth);
 		handleConnection(ws);
 	});
 

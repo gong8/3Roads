@@ -77,3 +77,22 @@ path at build time; Vite assets, React Router, API/audio requests, and WebSocket
 ```sh
 VITE_BASE_PATH=/3roads/ pnpm build
 ```
+
+## Sign in with ChatGPT
+
+Generation and fuzzy answer judging run on each user's own ChatGPT Plus or Pro plan, using
+OpenAI's [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
+open-source flow. The server holds no API key and stores no user credentials: tokens live in
+the user's HttpOnly cookies and are used in memory for the request (or game socket) that needs them.
+
+That flow only accepts a `http://127.0.0.1:1455/auth/callback` redirect, so after approving, the
+user pastes the address their browser lands on back into 3Roads (top right of the nav).
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENAI_MODEL` | `gpt-5.4` | Default generation model |
+| `OPENAI_JUDGE_MODEL` | `OPENAI_MODEL` | Model for ambiguous answer judging |
+| `CHATGPT_HOST_FILE` | `data/chatgpt-host.json` | Stable, non-secret install ID OpenAI asks for; must be writable |
+
+The API needs outbound HTTPS to `auth.openai.com` and `api.openai.com`, and the MCP server
+(`MCP_URL`, default `http://127.0.0.1:7002/mcp`) for saving generated questions.

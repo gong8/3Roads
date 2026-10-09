@@ -1,5 +1,5 @@
 import { createLogger } from "@3roads/shared";
-import { judgeAnswer } from "./judge.js";
+import { judgeAnswer, roomToken } from "./judge.js";
 import { generateTTS, storeAudio } from "./tts.js";
 import type { GameRoom, GameSyncEvt, Player, ServerMessage, TossupReading } from "./types.js";
 
@@ -498,6 +498,7 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 		tossup.answer,
 		questionText,
 		room.settings.strictness,
+		roomToken(room, playerId),
 	);
 
 	// Guard: if game state moved on during async judging (e.g. skip/end), bail out
@@ -877,6 +878,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 		part.answer,
 		part.text,
 		room.settings.strictness,
+		roomToken(room, br.controllingPlayerId),
 	);
 
 	// Guard: if game state moved on during async judging, bail out

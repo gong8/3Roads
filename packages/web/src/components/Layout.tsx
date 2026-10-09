@@ -1,4 +1,5 @@
 import { Outlet, Link, useLocation } from "react-router-dom";
+import { ChatGPTAuth } from "./ChatGPTAuth";
 
 export function Layout() {
   const { pathname } = useLocation();
@@ -9,6 +10,7 @@ export function Layout() {
         <Link to="/" className={pathname === "/" ? "underline" : ""}>browse</Link>
         <Link to="/generate" className={pathname === "/generate" ? "underline" : ""}>generate</Link>
         <Link to="/play" className={pathname.startsWith("/play") ? "underline" : ""}>play</Link>
+        <ChatGPTAuth />
       </nav>
       <Outlet />
     </div>
