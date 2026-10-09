@@ -1,3 +1,5 @@
+import { authHeaders } from "./api";
+
 export interface SSEEvent {
   event: string;
   data: string;
@@ -11,7 +13,7 @@ export async function* streamSSE(
   console.log("[3roads:sse]", "connecting:", url, "body:", JSON.stringify(body));
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { ...(await authHeaders()), "Content-Type": "application/json" },
     body: JSON.stringify(body),
     signal,
   });

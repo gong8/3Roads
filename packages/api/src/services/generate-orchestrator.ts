@@ -131,9 +131,9 @@ async function generatePictureTossups(params: {
 	count: number;
 	theme: string;
 	difficulty: string;
-	token: string;
+	userId: string;
 }): Promise<void> {
-	const { setId, count, theme, difficulty, token } = params;
+	const { setId, count, theme, difficulty, userId } = params;
 	const db = getDb();
 
 	const MAX_ATTEMPTS = 3;
@@ -181,7 +181,7 @@ Output ONLY a JSON array, no markdown. Example:
 			const raw = await runLlmChatSimple({
 				prompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
-				token,
+				userId,
 			});
 			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
 			const parsed = JSON.parse(cleaned) as PictureTopic[];
@@ -235,10 +235,10 @@ export async function runGeneration(params: {
 	bonusCount: number;
 	pictureCount?: number;
 	model?: string;
-	/** The requesting user's ChatGPT access token, held in memory for this run only. */
-	token: string;
+	/** The user whose ChatGPT plan pays for this run. */
+	userId: string;
 }): Promise<void> {
-	const { setId, theme, difficulty, tossupCount, bonusCount, pictureCount = 0, model, token } = params;
+	const { setId, theme, difficulty, tossupCount, bonusCount, pictureCount = 0, model, userId } = params;
 	// Picture questions are drawn from the tossup budget; written tossups fill the remainder
 	const writtenTossupCount = Math.max(0, tossupCount - pictureCount);
 	const db = getDb();
@@ -268,7 +268,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 				prompt: planPrompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
 				model,
-				token,
+				userId,
 			});
 
 			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
@@ -296,7 +296,8 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						prompt: tossupPrompt,
 						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
 						model,
-						token,
+						userId,
+						setId,
 					}),
 				);
 			}
@@ -310,7 +311,8 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						prompt: bonusPrompt,
 						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
 						model,
-						token,
+						userId,
+						setId,
 					}),
 				);
 			}
@@ -319,7 +321,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		// Picture tossups run in parallel with regular generation
 		if (pictureCount > 0) {
 			tasks.push(
-				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, token }),
+				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, userId }),
 			);
 		}
 

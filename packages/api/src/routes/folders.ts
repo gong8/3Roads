@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@3roads/shared";
 import { Hono } from "hono";
+import { currentUser } from "../services/user-auth.js";
 
 const log = createLogger("api:folders");
 
@@ -11,6 +12,7 @@ foldersRoutes.get("/", async (c) => {
 	try {
 		const db = getDb();
 		const folders = await db.folder.findMany({
+			where: { ownerId: currentUser(c).id },
 			orderBy: { name: "asc" },
 			include: {
 				_count: { select: { sets: true } },
@@ -42,7 +44,7 @@ foldersRoutes.post("/", async (c) => {
 		}
 
 		const db = getDb();
-		const folder = await db.folder.create({ data: { name: trimmed } });
+		const folder = await db.folder.create({ data: { name: trimmed, ownerId: currentUser(c).id } });
 
 		log.info(`POST /folders — created ${folder.id} "${folder.name}"`);
 		return c.json(folder, 201);
@@ -68,10 +70,12 @@ foldersRoutes.patch("/:id", async (c) => {
 		}
 
 		const db = getDb();
-		const folder = await db.folder.update({
-			where: { id },
+		const { count } = await db.folder.updateMany({
+			where: { id, ownerId: currentUser(c).id },
 			data: { name: trimmed },
 		});
+		if (count === 0) return c.json({ error: "Folder not found" }, 404);
+		const folder = { id, name: trimmed };
 
 		log.info(`PATCH /folders/${id} — renamed to "${folder.name}"`);
 		return c.json(folder);
@@ -94,7 +98,8 @@ foldersRoutes.delete("/:id", async (c) => {
 	log.info(`DELETE /folders/${id} — request received`);
 	try {
 		const db = getDb();
-		await db.folder.delete({ where: { id } });
+		const { count } = await db.folder.deleteMany({ where: { id, ownerId: currentUser(c).id } });
+		if (count === 0) return c.json({ error: "Folder not found" }, 404);
 
 		log.info(`DELETE /folders/${id} — deleted`);
 		return c.json({ ok: true });

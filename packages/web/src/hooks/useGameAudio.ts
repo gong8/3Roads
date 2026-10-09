@@ -3,7 +3,7 @@ import type { GameState } from "./useGameRoom";
 import { API_BASE, BASE_PATH } from "../lib/base-path";
 
 const AUDIO_BASE = import.meta.env.DEV && BASE_PATH === "/"
-	? `http://${window.location.hostname}:7001`
+	? `http://${window.location.hostname}:7001/api`
 	: API_BASE;
 
 export function useGameAudio(state: GameState, sendAudioReady: () => void): void {

@@ -8,7 +8,6 @@ const ROOT = path.resolve(__dirname, "..");
 const WEB_DIST = path.join(ROOT, "packages/web/dist");
 const API_DIR = path.join(ROOT, "packages/api");
 
-const MCP_DIR = path.join(ROOT, "packages/mcp");
 const TUNNEL_NAME = "3roads";
 const HOSTNAME = "3roads.nelsongong.com";
 
@@ -24,14 +23,6 @@ try {
 console.log("\n  Building web...\n");
 execFileSync("pnpm", ["turbo", "build", "--filter=@3roads/web"], {
 	cwd: ROOT,
-	stdio: "inherit",
-});
-
-// Start MCP server
-console.log("\n  Starting MCP server...\n");
-const mcp = spawn("npx", ["tsx", "src/index.ts"], {
-	cwd: MCP_DIR,
-	env: { ...process.env },
 	stdio: "inherit",
 });
 
@@ -57,11 +48,9 @@ const cleanup = (source) => {
 	console.log(`\n  [cleanup] triggered by: ${source}`);
 	tunnel.kill();
 	api.kill();
-	mcp.kill();
 	process.exit();
 };
 
-mcp.on("exit", (code) => console.log(`  [exit] MCP exited with code ${code}`));
 process.on("SIGINT", () => cleanup("SIGINT"));
 process.on("SIGTERM", () => cleanup("SIGTERM"));
 api.on("exit", (code) => cleanup(`API exit (code ${code})`));

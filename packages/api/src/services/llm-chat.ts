@@ -1,8 +1,7 @@
 import { createLogger } from "@3roads/shared";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { RESOURCE } from "./chatgpt-auth.js";
+import { getAccessToken, RESOURCE } from "./chatgpt-auth.js";
 import { LineBuffer } from "./line-buffer.js";
+import { type BonusInput, saveBonuses, saveTossups, type TossupInput } from "./question-store.js";
 
 // Inference runs on the signed-in user's ChatGPT plan through the Responses API.
 // Requests follow the plan-usage rules: store:false, stream:true, instructions
@@ -11,7 +10,6 @@ import { LineBuffer } from "./line-buffer.js";
 
 const log = createLogger("api:llm");
 
-const MCP_URL = process.env.MCP_URL || "http://127.0.0.1:7002/mcp";
 const RESPONSES_URL = `${RESOURCE}/responses`;
 export const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-5.4";
 const MAX_TURNS = 10;
@@ -19,7 +17,6 @@ const MAX_TURNS = 10;
 // Tools are exposed to the model with the same names the prompts (and web UI) already use
 const TOOL_PREFIX = "mcp__3roads__";
 const TOOL_NAMESPACE = "threeroads";
-const ALLOWED_MCP_TOOLS = new Set(["save_tossups_batch", "save_bonuses_batch"]);
 
 const SYSTEM_PROMPT_SUFFIX = [
 	"",
@@ -68,42 +65,90 @@ export class LlmError extends Error {
 	}
 }
 
-// -- MCP --
+// -- Save tools (in-process, bound to the run's set) --
 
-async function connectMcp(): Promise<{ client: Client; tools: NamespaceTool[] }> {
-	const client = new Client({ name: "3roads-api", version: "0.0.1" });
-	await client.connect(new StreamableHTTPClientTransport(new URL(MCP_URL)));
-	const { tools } = await client.listTools();
-	const fns = tools
-		.filter((t) => ALLOWED_MCP_TOOLS.has(t.name))
-		.map((t) => ({
-			type: "function" as const,
-			name: TOOL_PREFIX + t.name,
-			description: t.description,
-			parameters: t.inputSchema,
-		}));
-	log.debug(`connectMcp — ${fns.length} tools from ${MCP_URL}`);
-	return {
-		client,
-		tools: [{ type: "namespace", name: TOOL_NAMESPACE, description: "Save quiz bowl questions.", tools: fns }],
-	};
-}
+const tossupSchema = {
+	type: "object",
+	properties: {
+		question: { type: "string", description: "The tossup question text" },
+		answer: { type: "string", description: "The answer to the tossup" },
+		powerMarkIndex: { type: "number", description: "Character index of the power mark (*)" },
+		category: { type: "string", description: "Question category (e.g., Science, History)" },
+		subcategory: { type: "string", description: "Question subcategory" },
+		difficulty: { type: "string", description: "Difficulty level" },
+	},
+	required: ["question", "answer", "category", "subcategory", "difficulty"],
+};
 
-async function callMcpTool(client: Client, call: FunctionCall): Promise<{ text: string; isError: boolean }> {
-	const name = call.name.replace(TOOL_PREFIX, "");
-	if (!ALLOWED_MCP_TOOLS.has(name)) {
-		return { text: `Error: tool ${call.name} is not available`, isError: true };
-	}
-	let args: Record<string, unknown>;
+const bonusSchema = {
+	type: "object",
+	properties: {
+		leadin: { type: "string", description: "The bonus leadin text" },
+		part1Text: { type: "string" },
+		part1Answer: { type: "string" },
+		part2Text: { type: "string" },
+		part2Answer: { type: "string" },
+		part3Text: { type: "string" },
+		part3Answer: { type: "string" },
+		category: { type: "string", description: "Question category (e.g., Science, History)" },
+		subcategory: { type: "string" },
+		difficulty: { type: "string" },
+	},
+	required: [
+		"leadin", "part1Text", "part1Answer", "part2Text", "part2Answer", "part3Text", "part3Answer",
+		"category", "subcategory", "difficulty",
+	],
+};
+
+// setId is accepted because the prompts mention it, but ignored: a run can only ever
+// write into the set it was started for.
+const SAVE_TOOLS: NamespaceTool[] = [
+	{
+		type: "namespace",
+		name: TOOL_NAMESPACE,
+		description: "Save quiz bowl questions.",
+		tools: [
+			{
+				type: "function",
+				name: `${TOOL_PREFIX}save_tossups_batch`,
+				description: "Save multiple quiz bowl tossups to the set in one call.",
+				parameters: {
+					type: "object",
+					properties: { setId: { type: "string" }, tossups: { type: "array", items: tossupSchema } },
+					required: ["tossups"],
+				},
+			},
+			{
+				type: "function",
+				name: `${TOOL_PREFIX}save_bonuses_batch`,
+				description: "Save multiple quiz bowl bonuses to the set in one call.",
+				parameters: {
+					type: "object",
+					properties: { setId: { type: "string" }, bonuses: { type: "array", items: bonusSchema } },
+					required: ["bonuses"],
+				},
+			},
+		],
+	},
+];
+
+async function callSaveTool(setId: string, call: FunctionCall): Promise<{ text: string; isError: boolean }> {
+	let args: { tossups?: TossupInput[]; bonuses?: BonusInput[] };
 	try {
 		args = call.arguments ? JSON.parse(call.arguments) : {};
 	} catch (err) {
 		return { text: `Error: invalid JSON arguments: ${err instanceof Error ? err.message : err}`, isError: true };
 	}
 	try {
-		const result = await client.callTool({ name, arguments: args });
-		const content = (result.content ?? []) as Array<{ type: string; text?: string }>;
-		return { text: content.map((c) => c.text ?? "").join(""), isError: result.isError === true };
+		if (call.name === `${TOOL_PREFIX}save_tossups_batch`) {
+			await saveTossups(setId, args.tossups ?? []);
+			return { text: `Saved ${args.tossups?.length} tossups.`, isError: false };
+		}
+		if (call.name === `${TOOL_PREFIX}save_bonuses_batch`) {
+			await saveBonuses(setId, args.bonuses ?? []);
+			return { text: `Saved ${args.bonuses?.length} bonuses.`, isError: false };
+		}
+		return { text: `Error: tool ${call.name} is not available`, isError: true };
 	} catch (err) {
 		return { text: `Error: ${err instanceof Error ? err.message : err}`, isError: true };
 	}
@@ -211,55 +256,54 @@ export async function streamResponse(options: {
 // -- Agent loop --
 
 async function runAgentLoop(options: {
-	token: string;
+	userId: string;
 	prompt: string;
 	systemPrompt: string;
 	model?: string;
 	signal?: AbortSignal;
 	emit?: SSEEmitter;
-	useTools: boolean;
+	/** When set, the model gets the save tools, bound to this set. */
+	setId?: string;
 }): Promise<string> {
 	const model = resolveModel(options.model);
 	const startMs = performance.now();
-	log.info(`runAgentLoop START — model=${model} tools=${options.useTools} prompt=${options.prompt.length} chars`);
+	log.info(`runAgentLoop START — model=${model} set=${options.setId ?? "-"} prompt=${options.prompt.length} chars`);
 
-	const mcp = options.useTools ? await connectMcp() : undefined;
 	// store:false means no server-side history: every turn resends the whole conversation.
 	const input: InputItem[] = [{ role: "user", content: options.prompt }];
 	let lastContent = "";
 
-	try {
-		for (let turn = 1; turn <= MAX_TURNS; turn++) {
-			const { content, calls } = await streamResponse({
-				token: options.token,
-				model,
-				instructions: options.systemPrompt,
-				input,
-				tools: mcp?.tools ?? [],
-				emit: options.emit,
-				signal: options.signal,
-			});
-			lastContent = content;
+	for (let turn = 1; turn <= MAX_TURNS; turn++) {
+		// Fetched per turn: the server refreshes the user's grant when it nears expiry.
+		const token = await getAccessToken(options.userId);
+		if (!token) throw new LlmError("ChatGPT is not connected. Connect it in settings.", "not_connected");
+		const { content, calls } = await streamResponse({
+			token,
+			model,
+			instructions: options.systemPrompt,
+			input,
+			tools: options.setId ? SAVE_TOOLS : [],
+			emit: options.emit,
+			signal: options.signal,
+		});
+		lastContent = content;
 
-			if (calls.length === 0 || !mcp) break;
+		if (calls.length === 0 || !options.setId) break;
 
-			for (const call of calls) {
-				let args: unknown = {};
-				try {
-					args = call.arguments ? JSON.parse(call.arguments) : {};
-				} catch {}
-				log.info(`runAgentLoop — tool_call_complete: ${call.name} (${call.call_id})`);
-				options.emit?.("tool_call_args", JSON.stringify({ toolCallId: call.call_id, toolName: call.name, args }));
+		for (const call of calls) {
+			let args: unknown = {};
+			try {
+				args = call.arguments ? JSON.parse(call.arguments) : {};
+			} catch {}
+			log.info(`runAgentLoop — tool_call_complete: ${call.name} (${call.call_id})`);
+			options.emit?.("tool_call_args", JSON.stringify({ toolCallId: call.call_id, toolName: call.name, args }));
 
-				const { text, isError } = await callMcpTool(mcp.client, call);
-				if (isError) log.warn(`runAgentLoop — tool ${call.name} error: ${text.slice(0, 300)}`);
-				options.emit?.("tool_result", JSON.stringify({ toolCallId: call.call_id, result: text, isError }));
-				input.push({ type: "function_call", ...call });
-				input.push({ type: "function_call_output", call_id: call.call_id, output: text });
-			}
+			const { text, isError } = await callSaveTool(options.setId, call);
+			if (isError) log.warn(`runAgentLoop — tool ${call.name} error: ${text.slice(0, 300)}`);
+			options.emit?.("tool_result", JSON.stringify({ toolCallId: call.call_id, result: text, isError }));
+			input.push({ type: "function_call", ...call });
+			input.push({ type: "function_call_output", call_id: call.call_id, output: text });
 		}
-	} finally {
-		await mcp?.client.close().catch(() => {});
 	}
 
 	log.info(`runAgentLoop DONE — ${(performance.now() - startMs).toFixed(0)}ms`);
@@ -269,21 +313,22 @@ async function runAgentLoop(options: {
 // -- Public API --
 
 export interface LlmChatOptions {
-	/** The signed-in user's ChatGPT access token. */
-	token: string;
+	/** The 3Roads user whose ChatGPT plan pays for this run. */
+	userId: string;
 	prompt: string;
 	systemPrompt: string;
 	model?: string;
 	signal?: AbortSignal;
 }
 
-/** Tool-using generation run (saves questions via MCP). */
-export async function runLlmChat(options: LlmChatOptions): Promise<{ ok: boolean; result?: string; error?: string }> {
+/** Tool-using generation run that saves questions into `setId`. */
+export async function runLlmChat(
+	options: LlmChatOptions & { setId: string },
+): Promise<{ ok: boolean; result?: string; error?: string }> {
 	try {
 		const result = await runAgentLoop({
 			...options,
 			systemPrompt: options.systemPrompt + SYSTEM_PROMPT_SUFFIX,
-			useTools: true,
 		});
 		return { ok: true, result };
 	} catch (err) {
@@ -295,11 +340,11 @@ export async function runLlmChat(options: LlmChatOptions): Promise<{ ok: boolean
 
 /** Single-turn text completion, no tools. */
 export function runLlmChatSimple(options: LlmChatOptions): Promise<string> {
-	return runAgentLoop({ ...options, useTools: false });
+	return runAgentLoop({ ...options, setId: undefined });
 }
 
 /** Tool-using generation run streamed as SSE events. */
-export function streamLlmChat(options: LlmChatOptions): ReadableStream<Uint8Array> {
+export function streamLlmChat(options: LlmChatOptions & { setId: string }): ReadableStream<Uint8Array> {
 	const encoder = new TextEncoder();
 
 	return new ReadableStream({
@@ -312,7 +357,6 @@ export function streamLlmChat(options: LlmChatOptions): ReadableStream<Uint8Arra
 				await runAgentLoop({
 					...options,
 					systemPrompt: options.systemPrompt + SYSTEM_PROMPT_SUFFIX,
-					useTools: true,
 					emit,
 				});
 			} catch (err) {

@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
 
+import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Clerk is an external service; render as a signed-in user.
+vi.mock("@clerk/react", () => ({
+	ClerkProvider: ({ children }: { children: ReactNode }) => children,
+	Show: ({ when, children }: { when: string; children: ReactNode }) => (when === "signed-in" ? children : null),
+	SignIn: () => null,
+	UserButton: () => null,
+}));
 
 describe("configurable deployment base path", () => {
 	beforeEach(() => {
 		document.body.innerHTML = '<div id="root"></div>';
+		vi.stubEnv("VITE_CLERK_PUBLISHABLE_KEY", "pk_test_fixture");
 		window.history.replaceState(null, "", "/3roads/");
 		vi.stubGlobal(
 			"fetch",
@@ -17,6 +27,7 @@ describe("configurable deployment base path", () => {
 
 	afterEach(() => {
 		vi.unstubAllGlobals();
+		vi.unstubAllEnvs();
 		vi.resetModules();
 	});
 
@@ -53,7 +64,7 @@ describe("configurable deployment base path", () => {
 		});
 
 		const requestedUrls = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
-		expect(requestedUrls).toContain("/3roads/sets");
+		expect(requestedUrls).toContain("/3roads/api/sets");
 
 		const { createGameSocket } = await import("./lib/ws");
 		createGameSocket();

@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { createLogger } from "@3roads/shared";
 import { runLlmChatSimple } from "../services/llm-chat.js";
 import type { TossupData } from "../game/types.js";
-import { requireToken } from "./auth.js";
+import { getAccessToken } from "../services/chatgpt-auth.js";
+import { currentUser } from "../services/user-auth.js";
 
 const log = createLogger("api:picture-rounds");
 const app = new Hono();
@@ -44,8 +45,10 @@ async function fetchWikiThumbnail(title: string): Promise<{ imageUrl: string; an
  * Uses a single Haiku call to generate Wikipedia topic names, then fetches images.
  */
 app.get("/generate", async (c) => {
-	const token = await requireToken(c);
-	if (!token) return c.json({ error: "Sign in with ChatGPT to generate a picture round" }, 401);
+	const user = currentUser(c);
+	if (!(await getAccessToken(user.id).catch(() => null))) {
+		return c.json({ error: "Connect ChatGPT in settings to generate a picture round" }, 403);
+	}
 	const count = Math.min(Math.max(parseInt(c.req.query("count") ?? "10"), 1), 30);
 	const theme = c.req.query("theme") ?? "famous people, landmarks, and artworks";
 	const difficulty = c.req.query("difficulty") ?? "Regular High School";
@@ -68,7 +71,7 @@ Output ONLY a JSON array of strings, no markdown, no extra text. Example: ["Albe
 		const raw = await runLlmChatSimple({
 			prompt,
 			systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
-			token,
+			userId: user.id,
 		});
 		// Strip markdown fences if present
 		const cleaned = raw.replace(/```[a-z]*\n?/g, "").trim();

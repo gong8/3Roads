@@ -1,5 +1,6 @@
 import { createLogger, getDb } from "@3roads/shared";
 import type { WebSocket } from "ws";
+import { socketUsers } from "./socket-users.js";
 import type { BonusData, ExternalPacket, GameMode, GameRoom, Player, TossupData } from "./types.js";
 
 const log = createLogger("api:game:rooms");
@@ -53,8 +54,10 @@ export async function createRoom(
 	} else {
 		if (!questionSetId) throw new Error("questionSetId or externalPacket required");
 		const db = getDb();
-		const set = await db.questionSet.findUnique({
-			where: { id: questionSetId },
+		// Only sets the creator can see: the public pool plus their own private ones.
+		const userId = socketUsers.get(ws);
+		const set = await db.questionSet.findFirst({
+			where: { id: questionSetId, OR: [{ isPrivate: false }, ...(userId ? [{ ownerId: userId }] : [])] },
 			include: {
 				tossups: { orderBy: { createdAt: "asc" } },
 				bonuses: {

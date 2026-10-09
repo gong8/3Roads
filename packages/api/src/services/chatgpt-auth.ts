@@ -1,20 +1,16 @@
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createLogger } from "@3roads/shared";
-import type { Context } from "hono";
-import { deleteCookie, getCookie, setCookie } from "hono/cookie";
+import { createLogger, getDb } from "@3roads/shared";
 
-// "Sign in with ChatGPT" (open-source flow), one ChatGPT account per browser:
+// "Sign in with ChatGPT" (open-source flow), connected per 3Roads user for inference:
 // https://developers.openai.com/siwc/token-sharing-open-source/sign-in
 //
-// The server keeps no user credentials. Tokens live in the user's own HttpOnly
-// cookies and pass through this process only for the request that uses them.
-// The server signs the cookies it issues and ignores unsigned ones, so made-up
-// tokens never cause a request to OpenAI.
-// The flow only allows a 127.0.0.1 callback, so the user pastes the URL their
-// browser lands on back into 3Roads, which finishes the exchange.
+// Like monster, the grant is stored server-side (ChatGPTConnection, in the owner-only
+// database) and refreshed here, so long games and background generation keep working.
+// The flow only allows a 127.0.0.1 callback, so the user pastes the URL their browser
+// lands on back into 3Roads, which finishes the exchange.
 
 const log = createLogger("api:chatgpt-auth");
 
@@ -35,12 +31,6 @@ const UNUSABLE_REFRESH = new Set([
 	"refresh_token_reused",
 ]);
 
-// Cookie names
-const AT = "cg_at";
-const RT = "cg_rt";
-const META = "cg_meta";
-const LOGIN = "cg_login";
-
 export class AuthError extends Error {
 	constructor(
 		message: string,
@@ -48,14 +38,6 @@ export class AuthError extends Error {
 	) {
 		super(message);
 	}
-}
-
-interface Meta {
-	clientId: string;
-	email?: string;
-	expiresAt: number; // epoch ms
-	earliestRefreshAt?: number; // epoch ms
-	sig?: string; // HMAC over the access token, refresh token and the fields above
 }
 
 interface TokenResponse {
@@ -69,102 +51,28 @@ interface TokenResponse {
 
 const b64url = (bytes: Buffer) => bytes.toString("base64url");
 
-// Per-install state: the stable host ID OpenAI asks for, and a random key that signs
-// session cookies. The key is local to this install and grants no access to anything.
+// Stable, non-secret host ID for this 3Roads install (OpenAI asks for a persistent one).
 const HOST_FILE =
 	process.env.CHATGPT_HOST_FILE ?? join(dirname(fileURLToPath(import.meta.url)), "../../../../data/chatgpt-host.json");
-let host: { hostId: string; cookieKey: string } | undefined;
-function getHost() {
-	if (host) return host;
-	const saved = existsSync(HOST_FILE)
-		? (JSON.parse(readFileSync(HOST_FILE, "utf8")) as { hostId?: string; cookieKey?: string })
-		: {};
-	host = {
-		hostId: saved.hostId ?? `urn:uuid:${randomUUID()}`,
-		cookieKey: saved.cookieKey ?? b64url(randomBytes(32)),
-	};
-	if (saved.hostId !== host.hostId || saved.cookieKey !== host.cookieKey) {
-		writeFileSync(HOST_FILE, JSON.stringify(host), { mode: 0o600 });
+let hostId: string | undefined;
+function getHostId(): string {
+	if (hostId) return hostId;
+	if (existsSync(HOST_FILE)) hostId = (JSON.parse(readFileSync(HOST_FILE, "utf8")) as { hostId: string }).hostId;
+	else {
+		hostId = `urn:uuid:${randomUUID()}`;
+		writeFileSync(HOST_FILE, JSON.stringify({ hostId }));
 	}
-	return host;
+	return hostId;
 }
 
-// A sign-in in progress (PKCE verifier, state, nonce) lives in the starting browser's own
-// HttpOnly cookie, not in server memory: nothing for unauthenticated requests to fill or
-// evict, and only the browser that started a sign-in can finish it.
+// One sign-in in progress per user; only signed-in (allowlisted) users reach this.
 const PENDING_TTL = 10 * 60_000;
-interface Pending {
-	state: string;
-	verifier: string;
-	nonce: string;
-	clientId: string;
-}
+const pending = new Map<string, { state: string; verifier: string; nonce: string; clientId: string; createdAt: number }>();
 
-function isHttps(c: Context): boolean {
-	return c.req.header("x-forwarded-proto") === "https" || new URL(c.req.url).protocol === "https:";
-}
-
-function cookieOpts(c: Context, maxAge: number) {
-	return { path: "/", httpOnly: true, secure: isHttps(c), sameSite: "Strict" as const, maxAge };
-}
-
-const REFRESH_MAX_AGE = 30 * 24 * 3600; // refresh tokens last 30 days
-
-function saveTokens(c: Context, tokens: TokenResponse, prev: Meta & { refreshToken?: string }, email?: string) {
-	const meta: Meta = {
-		clientId: prev.clientId,
-		email: email ?? prev.email,
-		expiresAt: Date.now() + tokens.expires_in * 1000,
-		earliestRefreshAt: parseEarliest(tokens.earliest_refresh_at),
-	};
-	const refreshToken = tokens.refresh_token ?? prev.refreshToken;
-	if (!refreshToken) throw new AuthError("Token response has no refresh token");
-	meta.sig = sign(tokens.access_token, refreshToken, meta);
-	setCookie(c, AT, tokens.access_token, cookieOpts(c, REFRESH_MAX_AGE));
-	setCookie(c, RT, refreshToken, cookieOpts(c, REFRESH_MAX_AGE));
-	setCookie(c, META, Buffer.from(JSON.stringify(meta)).toString("base64url"), cookieOpts(c, REFRESH_MAX_AGE));
-	return { accessToken: tokens.access_token, meta };
-}
-
-function clearTokens(c: Context) {
-	for (const name of [AT, RT, META]) deleteCookie(c, name, { path: "/" });
-}
-
-function parseEarliest(value: TokenResponse["earliest_refresh_at"]) {
-	if (value == null) return undefined;
+function parseEarliest(value: TokenResponse["earliest_refresh_at"]): Date | null {
+	if (value == null) return null;
 	const ms = typeof value === "number" ? value * 1000 : Date.parse(value);
-	return Number.isFinite(ms) ? ms : undefined;
-}
-
-function sign(accessToken: string, refreshToken: string, meta: Meta): string {
-	const { sig: _, ...fields } = meta;
-	return createHmac("sha256", getHost().cookieKey)
-		.update(JSON.stringify([accessToken, refreshToken, fields]))
-		.digest("base64url");
-}
-
-interface Session {
-	accessToken: string;
-	refreshToken: string;
-	meta: Meta;
-}
-
-/** The session in these cookies, only if this server issued it. */
-function readSession(cookie: (name: string) => string | undefined): Session | undefined {
-	const accessToken = cookie(AT);
-	const refreshToken = cookie(RT);
-	const raw = cookie(META);
-	if (!accessToken || !refreshToken || !raw) return undefined;
-	let meta: Meta;
-	try {
-		meta = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Meta;
-	} catch {
-		return undefined;
-	}
-	const expected = Buffer.from(sign(accessToken, refreshToken, meta));
-	const given = Buffer.from(meta.sig ?? "");
-	if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
-	return { accessToken, refreshToken, meta };
+	return Number.isFinite(ms) ? new Date(ms) : null;
 }
 
 async function tokenRequest(body: Record<string, string>): Promise<TokenResponse> {
@@ -186,13 +94,14 @@ async function tokenRequest(body: Record<string, string>): Promise<TokenResponse
 	return json as unknown as TokenResponse;
 }
 
-/** Starts a sign-in; returns the OpenAI URL the browser should open. */
-export function beginLogin(c: Context): string {
+/** Starts connecting ChatGPT for this user; returns the OpenAI URL to open. */
+export async function beginLogin(userId: string): Promise<string> {
+	const existing = await getDb().chatGPTConnection.findUnique({ where: { userId } });
+	// Reuse the issued client ID; the first sign-in registers through the dynamic entrypoint.
+	const clientId = existing?.clientId ?? "dynamic_agent_client";
 	const verifier = b64url(randomBytes(32));
 	const state = b64url(randomBytes(24));
 	const nonce = b64url(randomBytes(24));
-	// Reuse this browser's issued client ID; first sign-in registers through the dynamic entrypoint.
-	const clientId = readSession((n) => getCookie(c, n))?.meta.clientId ?? "dynamic_agent_client";
 
 	const params = new URLSearchParams({
 		client_id: clientId,
@@ -207,29 +116,25 @@ export function beginLogin(c: Context): string {
 	});
 	if (clientId === "dynamic_agent_client") {
 		params.set("agent_name_hint", "3Roads");
-		params.set("ext_agent_host_id", getHost().hostId);
+		params.set("ext_agent_host_id", getHostId());
 	}
-	const pending: Pending = { state, verifier, nonce, clientId };
-	setCookie(c, LOGIN, Buffer.from(JSON.stringify(pending)).toString("base64url"), cookieOpts(c, PENDING_TTL / 1000));
+	pending.set(userId, { state, verifier, nonce, clientId, createdAt: Date.now() });
 	return `${authorizeUrl}?${params}`;
 }
 
-/** Finishes a sign-in from the callback URL the user pasted. */
-export async function completeLogin(c: Context, pastedUrl: string): Promise<{ email?: string }> {
+/** Finishes connecting ChatGPT from the callback URL the user pasted. */
+export async function completeLogin(userId: string, pastedUrl: string): Promise<{ email?: string }> {
 	let query: URLSearchParams;
 	try {
 		query = new URL(pastedUrl.trim()).searchParams;
 	} catch {
 		throw new AuthError("That doesn't look like a URL. Paste the whole address from the address bar.");
 	}
-	let attempt: Pending | undefined;
-	try {
-		attempt = JSON.parse(Buffer.from(getCookie(c, LOGIN) ?? "", "base64url").toString("utf8")) as Pending;
-	} catch {}
-	if (!attempt?.state || attempt.state !== query.get("state")) {
-		throw new AuthError("Unknown or expired sign-in attempt. Start again in this browser.");
+	const attempt = pending.get(userId);
+	if (!attempt || attempt.state !== query.get("state") || Date.now() - attempt.createdAt > PENDING_TTL) {
+		throw new AuthError("Unknown or expired sign-in attempt. Start again.");
 	}
-	deleteCookie(c, LOGIN, { path: "/" });
+	pending.delete(userId);
 
 	const error = query.get("error");
 	if (error) throw new AuthError(`Sign-in was not completed: ${error}`, error);
@@ -250,8 +155,8 @@ export async function completeLogin(c: Context, pastedUrl: string): Promise<{ em
 	if (!tokens.id_token || !tokens.refresh_token) throw new AuthError("Token response is missing an ID or refresh token");
 
 	// ponytail: the ID token came straight from OpenAI's token endpoint over TLS, which
-	// OIDC Core 3.1.3.7 accepts in place of a signature check. It is only read for
-	// the nonce and the email shown in the UI; access is decided by the access token.
+	// OIDC Core 3.1.3.7 accepts in place of a signature check. It is only read for the
+	// nonce and the email shown in settings; 3Roads identity comes from Clerk.
 	const claims = JSON.parse(Buffer.from(tokens.id_token.split(".")[1] ?? "", "base64url").toString("utf8")) as {
 		nonce?: string;
 		aud?: string | string[];
@@ -266,88 +171,82 @@ export async function completeLogin(c: Context, pastedUrl: string): Promise<{ em
 		throw new AuthError("ChatGPT plan usage was not granted. It needs a Plus or Pro plan.");
 	}
 
-	saveTokens(c, tokens, { clientId, expiresAt: 0 }, typeof claims.email === "string" ? claims.email : undefined);
-	log.info("completeLogin — signed in");
-	return { email: claims.email };
+	const data = {
+		clientId,
+		email: typeof claims.email === "string" ? claims.email : null,
+		accessToken: tokens.access_token,
+		refreshToken: tokens.refresh_token,
+		expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+		earliestRefreshAt: parseEarliest(tokens.earliest_refresh_at),
+	};
+	await getDb().chatGPTConnection.upsert({ where: { userId }, create: { userId, ...data }, update: data });
+	log.info(`completeLogin — connected ChatGPT for user ${userId}`);
+	return { email: data.email ?? undefined };
 }
 
-// One refresh per refresh token: concurrent requests from the same browser must not
-// both rotate it, or the second use revokes the whole token family. Only signed
-// sessions get here, so the map holds real users' refreshes.
-const refreshing = new Map<string, Promise<TokenResponse>>();
+// One refresh per user at a time: a second concurrent refresh would reuse the rotated
+// refresh token, which revokes the whole token family.
+const refreshing = new Map<string, Promise<string | null>>();
 
-/**
- * This request's ChatGPT access token, refreshed when within `minValidMs` of expiry
- * (rotated tokens go back to the browser as cookies). Returns null when signed out.
- */
-export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promise<string | null> {
-	const session = readSession((n) => getCookie(c, n));
-	if (!session) return null;
-	const { accessToken, refreshToken, meta } = session;
-
+/** A valid access token for this user's ChatGPT plan, or null if not connected. */
+export async function getAccessToken(userId: string): Promise<string | null> {
+	const conn = await getDb().chatGPTConnection.findUnique({ where: { userId } });
+	if (!conn) return null;
 	const now = Date.now();
-	const due = now > meta.expiresAt - minValidMs;
-	const allowed = !meta.earliestRefreshAt || now >= meta.earliestRefreshAt;
-	if (!due || (!allowed && now < meta.expiresAt)) return accessToken;
+	const due = now > conn.expiresAt.getTime() - 5 * 60_000;
+	const allowed = !conn.earliestRefreshAt || now >= conn.earliestRefreshAt.getTime();
+	if (!due || (!allowed && now < conn.expiresAt.getTime())) return conn.accessToken;
 
-	let flight = refreshing.get(refreshToken);
+	let flight = refreshing.get(userId);
 	if (!flight) {
-		flight = tokenRequest({
-			grant_type: "refresh_token",
-			client_id: meta.clientId,
-			refresh_token: refreshToken,
-			resource: RESOURCE,
-		});
-		refreshing.set(refreshToken, flight);
-		// Keep a success briefly so requests already in flight with the old cookie reuse it.
-		flight.then(
-			() => setTimeout(() => refreshing.delete(refreshToken), 60_000).unref(),
-			() => refreshing.delete(refreshToken),
-		);
+		flight = (async () => {
+			try {
+				const tokens = await tokenRequest({
+					grant_type: "refresh_token",
+					client_id: conn.clientId,
+					refresh_token: conn.refreshToken,
+					resource: RESOURCE,
+				});
+				await getDb().chatGPTConnection.update({
+					where: { userId },
+					data: {
+						accessToken: tokens.access_token,
+						refreshToken: tokens.refresh_token ?? conn.refreshToken,
+						expiresAt: new Date(Date.now() + tokens.expires_in * 1000),
+						earliestRefreshAt: parseEarliest(tokens.earliest_refresh_at),
+					},
+				});
+				return tokens.access_token;
+			} catch (err) {
+				if (err instanceof AuthError && UNUSABLE_REFRESH.has(err.code ?? "")) {
+					log.warn(`getAccessToken — refresh rejected (${err.code}) for user ${userId}, disconnecting`);
+					await getDb().chatGPTConnection.delete({ where: { userId } }).catch(() => {});
+					return null;
+				}
+				throw err;
+			} finally {
+				refreshing.delete(userId);
+			}
+		})();
+		refreshing.set(userId, flight);
 	}
-	try {
-		return saveTokens(c, await flight, { ...meta, refreshToken }).accessToken;
-	} catch (err) {
-		if (err instanceof AuthError && UNUSABLE_REFRESH.has(err.code ?? "")) {
-			log.warn(`getAccessToken — refresh rejected (${err.code}), signing out`);
-			clearTokens(c);
-			return null;
-		}
-		throw err;
-	}
+	return flight;
 }
 
-export async function status(c: Context, minValidMs?: number) {
-	const token = await getAccessToken(c, minValidMs);
-	if (!token) return { signedIn: false as const };
-	const meta = readSession((n) => getCookie(c, n))?.meta;
-	return { signedIn: true as const, email: meta?.email, expiresAt: meta?.expiresAt };
+export async function connectionStatus(userId: string) {
+	const conn = await getDb().chatGPTConnection.findUnique({ where: { userId }, select: { email: true } });
+	return conn ? { connected: true as const, email: conn.email ?? undefined } : { connected: false as const };
 }
 
-export async function logout(c: Context): Promise<void> {
-	const session = readSession((n) => getCookie(c, n));
-	clearTokens(c);
-	if (session) {
-		const { refreshToken, meta } = session;
-		// Best effort: the browser's cookies are already gone.
-		await fetch(revokeUrl, {
-			method: "POST",
-			headers: { "content-type": "application/x-www-form-urlencoded" },
-			body: new URLSearchParams({ token: refreshToken, token_type_hint: "refresh_token", client_id: meta.clientId }),
-			signal: AbortSignal.timeout(15_000),
-		}).catch(() => {});
-	}
-}
-
-/** Reads the access token from a raw Cookie header (WebSocket upgrades bypass Hono). */
-export function accessTokenFromCookieHeader(header: string | undefined): { token: string; expiresAt: number } | null {
-	if (!header) return null;
-	const cookies = new Map(
-		header.split(";").map((part) => {
-			const i = part.indexOf("=");
-			return [part.slice(0, i).trim(), decodeURIComponent(part.slice(i + 1).trim())] as const;
-		}),
-	);
-	const session = readSession((n) => cookies.get(n));
-	return session ? { token: session.accessToken, expiresAt: session.meta.expiresAt } : null;
+export async function disconnect(userId: string): Promise<void> {
+	const conn = await getDb().chatGPTConnection.findUnique({ where: { userId } });
+	if (!conn) return;
+	await getDb().chatGPTConnection.delete({ where: { userId } });
+	// Best effort: our copy is already gone.
+	await fetch(revokeUrl, {
+		method: "POST",
+		headers: { "content-type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({ token: conn.refreshToken, token_type_hint: "refresh_token", client_id: conn.clientId }),
+		signal: AbortSignal.timeout(15_000),
+	}).catch(() => {});
 }

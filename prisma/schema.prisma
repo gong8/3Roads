@@ -18,9 +18,15 @@ model QuestionSet {
   updatedAt  DateTime @updatedAt
   folderId   String?
   folder     Folder?  @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  /// Null for sets made before accounts existed; nobody owns (or can delete) those.
+  ownerId    String?
+  owner      User?    @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  /// Sets are in the public pool unless their owner hides them.
+  isPrivate  Boolean  @default(false)
   tossups    Tossup[]
   bonuses    Bonus[]
   @@index([folderId])
+  @@index([ownerId])
 }
 
 model Tossup {
@@ -67,8 +73,50 @@ model BonusPart {
 
 model Folder {
   id        String       @id @default(cuid())
-  name      String       @unique
+  name      String
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
+  ownerId   String?
+  owner     User?        @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   sets      QuestionSet[]
+  @@unique([ownerId, name])
+}
+
+/// A signed-in person. The id is their Clerk user ID.
+model User {
+  id        String             @id
+  email     String?
+  createdAt DateTime           @default(now())
+  chatgpt   ChatGPTConnection?
+  sets      QuestionSet[]
+  folders   Folder[]
+  games     GameResult[]
+}
+
+/// A user's "Sign in with ChatGPT" grant, used for their inference. Stored server-side
+/// like monster's credential file; the database file is owner-only (mode 600).
+model ChatGPTConnection {
+  userId            String    @id
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientId          String
+  email             String?
+  accessToken       String
+  refreshToken      String
+  expiresAt         DateTime
+  earliestRefreshAt DateTime?
+  updatedAt         DateTime  @updatedAt
+}
+
+/// One player's line from a finished game.
+model GameResult {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  setName   String
+  score     Int
+  powers    Int
+  tens      Int
+  negs      Int
+  createdAt DateTime @default(now())
+  @@index([userId, createdAt])
 }

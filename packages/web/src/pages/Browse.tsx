@@ -138,7 +138,10 @@ export function Browse() {
           <tbody>
             {filteredSets.map((s) => (
               <tr key={s.id} className="border-b border-gray-300">
-                <td className="py-1 break-words"><Link to={`/sets/${s.id}`} className="underline">{s.name}</Link></td>
+                <td className="py-1 break-words">
+                  <Link to={`/sets/${s.id}`} className="underline">{s.name}</Link>
+                  {s.isPrivate && <span className="ml-2 text-xs text-gray-500">private</span>}
+                </td>
                 <td className="py-1">{s.difficulty}</td>
                 {s.status === "generating" ? (
                   <td colSpan={3} className="py-1 text-center px-4 text-sm text-gray-500 italic">
@@ -152,6 +155,7 @@ export function Browse() {
                   </>
                 )}
                 <td className="py-1 px-4">
+                  {s.mine && (
                   <select
                     className="border border-gray-300 text-sm"
                     value={s.folderId ?? ""}
@@ -162,18 +166,29 @@ export function Browse() {
                       <option key={f.id} value={f.id}>{f.name}</option>
                     ))}
                   </select>
+                  )}
                 </td>
                 <td className="py-1">{new Date(s.createdAt).toLocaleDateString()}</td>
-                <td className="py-1 text-center">
-                  <button
-                    onClick={() => {
-                      if (!confirm(`Delete "${s.name}"? This cannot be undone.`)) return;
-                      deleteSet.mutate(s.id);
-                    }}
-                    className="text-gray-400 hover:text-black text-xs cursor-pointer"
-                  >
-                    delete
-                  </button>
+                <td className="py-1 text-center whitespace-nowrap">
+                  {s.mine && (
+                    <>
+                      <button
+                        onClick={() => updateSet.mutate({ id: s.id, isPrivate: !s.isPrivate })}
+                        className="text-gray-400 hover:text-black text-xs cursor-pointer mr-2"
+                      >
+                        {s.isPrivate ? "make public" : "make private"}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (!confirm(`Delete "${s.name}"? This cannot be undone.`)) return;
+                          deleteSet.mutate(s.id);
+                        }}
+                        className="text-gray-400 hover:text-black text-xs cursor-pointer"
+                      >
+                        delete
+                      </button>
+                    </>
+                  )}
                 </td>
               </tr>
             ))}

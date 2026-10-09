@@ -1,7 +1,5 @@
 import { createLogger } from "@3roads/shared";
-import type { WebSocket } from "ws";
 import { DEFAULT_MODEL, runLlmChatSimple } from "../services/llm-chat.js";
-import type { GameRoom } from "./types.js";
 
 const log = createLogger("api:game:judge");
 
@@ -97,8 +95,11 @@ export async function judgeAnswer(
 	canonicalAnswer: string,
 	questionText: string,
 	strictness: number,
-	/** The answering player's ChatGPT token; without one, ambiguous answers are judged incorrect. */
-	token?: string,
+	/**
+	 * The answering player's user ID. Their own ChatGPT plan pays for LLM judging, never
+	 * another player's; without a connected plan, ambiguous answers are judged incorrect.
+	 */
+	userId?: string,
 ): Promise<{ correct: boolean }> {
 	if (!submittedAnswer.trim()) {
 		return { correct: false };
@@ -112,8 +113,8 @@ export async function judgeAnswer(
 	}
 
 	// Slow path: fall back to LLM for ambiguous cases
-	if (!token) {
-		log.info(`judge [local] — submitted="${submittedAnswer}" unsure and the player is not signed in, verdict=incorrect`);
+	if (!userId) {
+		log.info(`judge [local] — submitted="${submittedAnswer}" unsure and the player is not identified, verdict=incorrect`);
 		return { correct: false };
 	}
 	// Strip bracketed moderator notes (e.g. "[prompt on X]") from canonical before sending to LLM
@@ -129,7 +130,7 @@ export async function judgeAnswer(
 	].join("\n");
 
 	try {
-		const result = await fetchJudge(token, systemPrompt, userPrompt);
+		const result = await fetchJudge(userId, systemPrompt, userPrompt);
 		const correct = result.trim().toLowerCase().includes("correct") &&
 			!result.trim().toLowerCase().startsWith("incorrect");
 		log.info(`judge [llm] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${correct ? "correct" : "incorrect"}`);
@@ -144,24 +145,9 @@ export async function judgeAnswer(
 
 const JUDGE_MODEL = process.env.OPENAI_JUDGE_MODEL || DEFAULT_MODEL;
 
-/** Connected players' ChatGPT access tokens, read from their cookies at WebSocket upgrade. Memory only. */
-export const socketTokens = new WeakMap<WebSocket, { token: string; expiresAt: number }>();
-
-/**
- * The answering player's own token, if they are signed in. Never another player's:
- * one player's answers must not spend someone else's ChatGPT plan.
- * ponytail: captured at connect and not refreshed, so after an hour that player falls
- * back to local judging; refresh over the socket if long games need the LLM.
- */
-export function playerToken(room: GameRoom, playerId: string): string | undefined {
-	const ws = room.players.get(playerId)?.ws;
-	const t = ws && socketTokens.get(ws);
-	return t && t.expiresAt > Date.now() + 30_000 ? t.token : undefined;
-}
-
-function fetchJudge(token: string, systemPrompt: string, userPrompt: string): Promise<string> {
+function fetchJudge(userId: string, systemPrompt: string, userPrompt: string): Promise<string> {
 	return runLlmChatSimple({
-		token,
+		userId,
 		model: JUDGE_MODEL,
 		systemPrompt,
 		prompt: userPrompt,

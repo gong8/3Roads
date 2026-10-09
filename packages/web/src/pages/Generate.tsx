@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useChatGPTStatus } from "../components/ChatGPTAuth";
+import { useChatGPTStatus } from "./Settings";
 import { useGenerate } from "../hooks/useGenerate";
 import { apiGet } from "../lib/api";
 import { formatCost } from "../lib/format";
@@ -25,12 +25,12 @@ export function Generate() {
   const pictureCount = Math.min(tossupCount, Math.max(0, parseInt(pictureCountStr, 10) || 0));
   const [includeBonuses, setIncludeBonuses] = useState(true);
   const [difficulty, setDifficulty] = useState("Regular High School");
-  const { data: auth } = useChatGPTStatus();
-  const signedIn = auth?.signedIn === true;
+  const { data: chatgpt } = useChatGPTStatus();
+  const connected = chatgpt?.connected === true;
   const { data: modelList } = useQuery({
     queryKey: ["chatgpt-models"],
-    queryFn: () => apiGet<{ default: string; models: { slug: string; name: string }[] }>("/auth/models"),
-    enabled: signedIn,
+    queryFn: () => apiGet<{ default: string; models: { slug: string; name: string }[] }>("/me/models"),
+    enabled: connected,
   });
   const [chosenModel, setModel] = useState<string | null>(null);
   const model = chosenModel ?? modelList?.default ?? "";
@@ -152,15 +152,18 @@ export function Generate() {
         </div>
         <button
           type="submit"
-          disabled={isGenerating || !theme.trim() || !signedIn}
+          disabled={isGenerating || !theme.trim() || !connected}
           className="border border-black px-3 py-1 disabled:text-gray-400 disabled:border-gray-400"
         >
           generate
         </button>
       </form>
 
-      {auth && !signedIn && (
-        <p className="mb-4 text-gray-600">sign in with chatgpt (top right) to generate. it uses your own plus or pro plan.</p>
+      {chatgpt && !connected && (
+        <p className="mb-4 text-gray-600">
+          <Link to="/settings" className="underline">connect chatgpt</Link> to generate. it uses your own plus or pro plan.
+          generated sets join the public pool; you can make yours private from browse.
+        </p>
       )}
       {error && <p className="text-red-600 mb-4">error: {error}</p>}
 
