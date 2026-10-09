@@ -91,10 +91,19 @@ interface Pending {
 	clientId: string;
 }
 
-// Refresh flights are keyed by caller-supplied cookies, so the map is bounded. When full,
-// new refreshes fail closed (the caller sees "signed out") instead of evicting a live
-// flight, which could let a second refresh reuse a rotated token and revoke the session.
-const MAX_REFRESH_FLIGHTS = 1000;
+// Refresh flights are keyed by caller-supplied cookies, so each client IP may start only a
+// few at once. Past that, that client's refreshes fail closed (it sees "signed out"); a
+// live flight is never evicted, since a second refresh could reuse a rotated token and
+// revoke the session. One spammer can only lock out itself.
+// ponytail: per-IP in-flight cap only; a many-IP flood needs an edge rate limit
+// (Cloudflare rule on /auth/* and /generate*), which is the place to add one.
+const MAX_REFRESHES_PER_CLIENT = 5;
+const refreshesByClient = new Map<string, number>();
+
+// Behind Cloudflare Tunnel the origin is loopback-only, so this header is set by Cloudflare.
+function clientKey(c: Context): string {
+	return c.req.header("cf-connecting-ip") ?? "direct";
+}
 
 function isHttps(c: Context): boolean {
 	return c.req.header("x-forwarded-proto") === "https" || new URL(c.req.url).protocol === "https:";
@@ -265,7 +274,10 @@ export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promi
 
 	let flight = refreshing.get(refreshToken);
 	if (!flight) {
-		if (refreshing.size >= MAX_REFRESH_FLIGHTS) throw new AuthError("Too many sign-in refreshes in progress");
+		const client = clientKey(c);
+		const inFlight = refreshesByClient.get(client) ?? 0;
+		if (inFlight >= MAX_REFRESHES_PER_CLIENT) throw new AuthError("Too many sign-in refreshes from this client");
+		refreshesByClient.set(client, inFlight + 1);
 		flight = tokenRequest({
 			grant_type: "refresh_token",
 			client_id: meta.clientId,
@@ -275,9 +287,20 @@ export async function getAccessToken(c: Context, minValidMs = 5 * 60_000): Promi
 		refreshing.set(refreshToken, flight);
 		// Keep a success briefly so requests already in flight with the old cookie reuse it.
 		// Failures (e.g. made-up tokens) leave at once, so they can't fill the map.
+		const release = () => {
+			const n = (refreshesByClient.get(client) ?? 1) - 1;
+			if (n > 0) refreshesByClient.set(client, n);
+			else refreshesByClient.delete(client);
+		};
 		flight.then(
-			() => setTimeout(() => refreshing.delete(refreshToken), 60_000).unref(),
-			() => refreshing.delete(refreshToken),
+			() => {
+				release();
+				setTimeout(() => refreshing.delete(refreshToken), 60_000).unref();
+			},
+			() => {
+				release();
+				refreshing.delete(refreshToken);
+			},
 		);
 	}
 	try {

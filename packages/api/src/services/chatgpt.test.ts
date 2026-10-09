@@ -115,6 +115,38 @@ test("refresh: concurrent requests with an expiring token rotate the refresh tok
 		const res = await app.request("/", { headers: { cookie: bogus } });
 		assert.equal(await res.text(), "none");
 	}
+	// A client flooding slow refreshes is capped without blocking other clients.
+	let release: () => void = () => {};
+	globalThis.fetch = (() =>
+		new Promise<Response>((resolve) => {
+			const prev = release;
+			release = () => {
+				prev();
+				resolve(Response.json({ error: "invalid_grant" }, { status: 400 }));
+			};
+		})) as typeof fetch;
+	const flood = Array.from({ length: 8 }, (_, i) =>
+		app.request("/", {
+			headers: {
+				"cf-connecting-ip": "203.0.113.9",
+				cookie: `cg_at=a; cg_rt=slow-${i}; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: 0 })}`,
+			},
+		}),
+	);
+	await new Promise((r) => setTimeout(r, 10));
+	const other = app.request("/", {
+		headers: {
+			"cf-connecting-ip": "198.51.100.1",
+			cookie: `cg_at=a; cg_rt=other; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: 0 })}`,
+		},
+	});
+	await new Promise((r) => setTimeout(r, 10));
+	release();
+	const floodResults = await Promise.all(flood.map(async (r) => (await r).status));
+	assert.equal(floodResults.filter((st) => st === 500).length, 3, "3 of 8 refused past the per-client cap");
+	assert.equal((await other).status, 200, "another client still refreshes");
+
+	globalThis.fetch = (async () => Response.json({ error: "invalid_grant" }, { status: 400 })) as typeof fetch;
 	const fresh = `cg_at=at-9; cg_rt=rt-9; cg_meta=${b64({ clientId: "oaiapp_123", expiresAt: Date.now() + 3_600_000 })}`;
 	assert.equal(await (await app.request("/", { headers: { cookie: fresh } })).text(), "at-9");
 });
