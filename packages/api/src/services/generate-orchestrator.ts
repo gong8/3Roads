@@ -11,8 +11,27 @@ const SYSTEM_PROMPT_SUFFIX = [
 	"- NEVER include the answer word, any variant of it, or anything that sounds like it ANYWHERE in the question text. Replace it with a placeholder like 'this country', 'this author', 'this element', 'this work', 'this region', etc. as appropriate. The answer must not be nameable from any word in the question itself.",
 	"- NEVER write clues that transparently give away the answer through etymology, word games, or trivial restatement.",
 	"- Every tossup must be strictly pyramidal: hardest clues first, power mark at 1/3-1/2 through, giveaway last.",
-	"- In every answer field, wrap the part a player MUST say in {curly braces}; everything outside the braces is optional. Examples: \"{Bakerloo} line\", \"Johann Sebastian {Bach}\", \"{Ely}, Cambridgeshire\", \"Battle of {Hastings}\", \"{mitochondria}\". If the whole answer is required, brace all of it: \"{France}\". Alternatives go in square brackets and get braces too: \"{DNA} [accept {deoxyribonucleic acid}]\".",
+	"- In every answer field, wrap the part a player MUST say in {curly braces}; everything outside the braces is optional. Brace only the distinctive name; generic descriptor words like River, Lake, Mount, Strait of, Battle of, line, or a first name stay OUTSIDE the braces. Examples: \"{Ganges} River\", \"Lake {Baikal}\", \"Strait of {Gibraltar}\", \"{Bakerloo} line\", \"Johann Sebastian {Bach}\", \"{Ely}, Cambridgeshire\", \"Battle of {Hastings}\". Brace the whole answer only when every word is essential: \"{France}\", \"{mitochondria}\", \"{The Great Gatsby}\". Alternatives go in square brackets and get braces too: \"{DNA} [accept {deoxyribonucleic acid}]\".",
 ].join("\n");
+
+/** Compare answers loosely: "{Strait of Gibraltar}" and "the strait of gibraltar" are the same answer. */
+function answerKey(answer: string): string {
+	return answer
+		.replace(/\[[^\]]*\]/g, "")
+		.toLowerCase()
+		.replace(/[^a-z0-9\s]/g, "")
+		.replace(/^the\s+/, "")
+		.replace(/\s+/g, " ")
+		.trim();
+}
+
+/** True when two answers name the same thing, including "Baikal" vs "Lake Baikal". */
+function sameAnswer(a: string, b: string): boolean {
+	const ka = answerKey(a);
+	const kb = answerKey(b);
+	if (!ka || !kb) return false;
+	return ka === kb || ` ${ka} `.includes(` ${kb} `) || ` ${kb} `.includes(` ${ka} `);
+}
 
 function buildTossupSystemPrompt(setId: string, difficulty: string, theme: string): string {
 	return `You are an expert quiz bowl question writer producing competition-quality academic questions.
@@ -121,6 +140,7 @@ async function fetchWikiImage(title: string): Promise<string | null> {
 
 interface PictureTopic {
 	title: string;
+	answer?: string;
 	hint1: string;
 	hint2: string;
 	category: string;
@@ -132,9 +152,11 @@ async function generatePictureTossups(params: {
 	count: number;
 	theme: string;
 	difficulty: string;
+	/** Answers already used elsewhere in the set; picture topics must not repeat them */
+	excludeAnswers: string[];
 	onCost?: (usd: number) => void;
 }): Promise<void> {
-	const { setId, count, theme, difficulty, onCost } = params;
+	const { setId, count, theme, difficulty, excludeAnswers, onCost } = params;
 	const db = getDb();
 
 	const MAX_ATTEMPTS = 3;
@@ -145,8 +167,9 @@ async function generatePictureTossups(params: {
 		const needed = count - collected.length;
 		log.info(`[${setId}] Picture generation attempt ${attempt}/${MAX_ATTEMPTS}: requesting ${needed} topics`);
 
-		const excludeClause = usedTitles.size > 0
-			? `\nDo NOT generate topics for any of these already-used titles: ${[...usedTitles].join(", ")}.`
+		const excluded = [...excludeAnswers, ...usedTitles];
+		const excludeClause = excluded.length > 0
+			? `\nDo NOT generate topics for any of these subjects, which are already used elsewhere in the set: ${excluded.join(", ")}.`
 			: "";
 
 		const prompt = `Generate exactly ${needed} Wikipedia article titles for picture quiz questions that fit the theme "${theme}" at "${difficulty}" difficulty.${excludeClause}
@@ -160,6 +183,7 @@ Difficulty calibration for subject selection:
 Current difficulty is "${difficulty}" — calibrate subject familiarity accordingly. Subjects must be directly related to the theme "${theme}".
 
 Each title must be a real Wikipedia article that has an image.
+Also give an "answer": the title with the part a player must say wrapped in {braces}. Generic descriptor words stay outside the braces: "Strait of {Gibraltar}", "{Ganges} River", "Lake {Baikal}". Brace the whole title only when every word is essential: "{Arnolfini Portrait}".
 For each topic write TWO hint sentences in pyramidal style:
 - Sentence 1 (harder): a specific contextual or visual detail that a knowledgeable player would recognise but not a casual observer
 - Sentence 2 (medium): a broader fact about the subject that helps confirm an answer — not a direct giveaway, but useful alongside the image
@@ -170,6 +194,7 @@ Output ONLY a JSON array, no markdown. Example:
 [
   {
     "title": "Arnolfini Portrait",
+    "answer": "{Arnolfini Portrait}",
     "hint1": "A convex mirror in the background reflects two additional figures entering the room, one widely believed to be the painter himself, while the Latin inscription above reads 'Jan van Eyck was here 1434'.",
     "hint2": "This oil painting depicting a Flemish merchant and his elaborately dressed companion is one of the earliest uses of oil paint in the northern European tradition.",
     "category": "Fine Arts",
@@ -187,7 +212,13 @@ Output ONLY a JSON array, no markdown. Example:
 			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
 			const parsed = JSON.parse(cleaned) as PictureTopic[];
 			if (!Array.isArray(parsed)) throw new Error("Not an array");
-			topics = parsed.slice(0, needed);
+			topics = parsed
+				.filter((t) => {
+					const clash = excludeAnswers.find((a) => sameAnswer(a, t.title));
+					if (clash) log.warn(`[${setId}] Dropping picture topic "${t.title}" — duplicates set answer "${clash}"`);
+					return !clash;
+				})
+				.slice(0, needed);
 		} catch (err) {
 			log.error(`[${setId}] Picture topic generation failed (attempt ${attempt}): ${err instanceof Error ? err.message : err}`);
 			break;
@@ -216,7 +247,8 @@ Output ONLY a JSON array, no markdown. Example:
 		data: collected.slice(0, count).map((t) => ({
 			setId,
 			question: `${t.hint1} ${t.hint2}`,
-			answer: t.title,
+			// Fall back to the bare title if the model dropped the field or braced a different string
+			answer: t.answer && answerKey(t.answer) === answerKey(t.title) ? t.answer : t.title,
 			powerMarkIndex: null,
 			imageUrl: t.imageUrl,
 			category: t.category,
@@ -226,6 +258,24 @@ Output ONLY a JSON array, no markdown. Example:
 	});
 
 	log.info(`[${setId}] Saved ${Math.min(collected.length, count)} picture tossups`);
+}
+
+/** Last line of defence: a set must never contain two tossups with the same answer. Keeps the earliest. */
+async function removeDuplicateTossups(setId: string): Promise<void> {
+	const db = getDb();
+	const tossups = await db.tossup.findMany({ where: { setId }, orderBy: { createdAt: "asc" }, select: { id: true, answer: true } });
+	const kept: string[] = [];
+	const duplicateIds: string[] = [];
+	for (const t of tossups) {
+		const clash = kept.find((k) => sameAnswer(k, t.answer));
+		if (clash) {
+			log.warn(`[${setId}] Removing duplicate tossup "${t.answer}" (same answer as "${clash}")`);
+			duplicateIds.push(t.id);
+		} else {
+			kept.push(t.answer);
+		}
+	}
+	if (duplicateIds.length > 0) await db.tossup.deleteMany({ where: { id: { in: duplicateIds } } });
 }
 
 export async function runGeneration(params: {
@@ -266,6 +316,7 @@ Bonus answers must not be about the same specific subject as any tossup answer. 
 Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		const tasks: Promise<unknown>[] = [];
+		const plannedAnswers: string[] = [];
 
 		if (writtenTossupCount > 0 || bonusCount > 0) {
 			const planResult = await runLlmChatSimple({
@@ -284,6 +335,8 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 			if (!plan.tossup_answers?.length && writtenTossupCount > 0) throw new Error("Answer planning returned no tossup answers");
 			if (!plan.bonus_answers?.length && bonusCount > 0) throw new Error("Answer planning returned no bonus answers");
+
+			plannedAnswers.push(...(plan.tossup_answers ?? []).slice(0, writtenTossupCount), ...(plan.bonus_answers ?? []).slice(0, bonusCount));
 
 			log.info(`[${setId}] Phase 1 complete: ${plan.tossup_answers?.length ?? 0} tossup answers, ${plan.bonus_answers?.length ?? 0} bonus answers`);
 
@@ -322,11 +375,12 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		// Picture tossups run in parallel with regular generation
 		if (pictureCount > 0) {
 			tasks.push(
-				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, onCost }),
+				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, excludeAnswers: plannedAnswers, onCost }),
 			);
 		}
 
 		const results = await Promise.allSettled(tasks);
+		await removeDuplicateTossups(setId);
 
 		const errors: string[] = [];
 		for (const r of results) {
