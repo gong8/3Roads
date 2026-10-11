@@ -1,3 +1,4 @@
+import { AnswerText } from "../components/AnswerText";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useGameAudio } from "../hooks/useGameAudio";
@@ -376,7 +377,7 @@ export function GameRoom() {
 			{/* Dead tossup message */}
 			{state.deadAnswer && !["reading_tossup", "reading_bonus", "bonus_answering"].includes(state.phase) && (
 				<div className="text-xs text-gray-500 mb-2">
-					dead tossup — answer: <span className="font-bold text-black">{state.deadAnswer}</span>
+					dead tossup — answer: <span className="font-bold text-black"><AnswerText answer={state.deadAnswer} /></span>
 				</div>
 			)}
 

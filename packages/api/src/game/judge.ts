@@ -78,6 +78,14 @@ function localJudge(
 			if (sortParts(normalizedSubmitted) === sortParts(normalizedForm)) return "correct";
 		}
 
+		// Required-part markup: "{Bakerloo} line" accepts "bakerloo". When present it is authoritative,
+		// so the guessing heuristics below are skipped (e.g. "{Ely}, Cambridgeshire" rejects "cambridgeshire").
+		const required = [...form.matchAll(/\{([^}]*)\}/g)].map((m) => m[1]);
+		if (required.length > 0) {
+			if (normalizedSubmitted === normalize(required.join(" "))) return "correct";
+			continue;
+		}
+
 		// Surname match: submitted = last word of a multi-word answer (e.g. "atkinson" for "Rowan Atkinson")
 		const formWords = normalizedForm.split(" ");
 		if (formWords.length > 1 && normalizedSubmitted === formWords[formWords.length - 1]) return "correct";
@@ -121,6 +129,9 @@ export async function judgeAnswer(
 	const systemPrompt = "You are a quiz bowl answer judge. Respond with ONLY \"correct\" or \"incorrect\".";
 	const userPrompt = [
 		`The canonical answer is: ${canonicalForLlm}`,
+		...(canonicalForLlm.includes("{")
+			? ["Text in {braces} is the part the player must give; everything outside the braces is optional."]
+			: []),
 		`The player submitted: ${submittedAnswer}`,
 		`The question was: ${questionText.slice(0, 500)}`,
 		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, adjective/demonym forms (e.g. "Italian" for "Italy"), and surnames alone for person answers (e.g. "Atkinson" is correct for "Rowan Atkinson"). Qualifiers in the canonical answer are optional: a place given with its region or country (e.g. "Ely" is correct for "Ely, Cambridgeshire"), or a title or disambiguation after a comma.`,

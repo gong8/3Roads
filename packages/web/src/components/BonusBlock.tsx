@@ -1,3 +1,5 @@
+import { AnswerText } from "./AnswerText";
+
 interface BonusPart {
   partNum: number;
   text: string;
@@ -26,7 +28,7 @@ export function BonusBlock({ leadin, parts, category, subcategory, difficulty, s
         <div key={part.partNum} className="ml-4 mb-2">
           <p>[{part.value}] {part.text}</p>
           {showAnswers ? (
-            <p className="font-bold">ANSWER: {part.answer}</p>
+            <p className="font-bold">ANSWER: <AnswerText answer={part.answer} /></p>
           ) : null}
         </div>
       ))}

@@ -1,3 +1,4 @@
+import { AnswerText } from "../AnswerText";
 import { useState, useMemo } from "react";
 import type { HistoryEntry } from "../../hooks/useGameRoom";
 
@@ -108,7 +109,7 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 									{group.tossup.questionText && renderTossupText(group.tossup.questionText, group.tossup.buzzes || [])}
 									<div>
 										<span className="text-gray-400">answer: </span>
-										<span className="font-bold">{group.tossup.answer}</span>
+										<span className="font-bold"><AnswerText answer={group.tossup.answer} /></span>
 									</div>
 									{group.tossup.buzzes && group.tossup.buzzes.length > 0 && (
 										<div className="mt-1 space-y-0.5">
@@ -136,7 +137,7 @@ export function QuestionHistory({ history }: { history: HistoryEntry[] }) {
 													{pr.correct ? `✓ 10` : `✗ 0`}
 												</span>
 												<div className="flex flex-col">
-													<span><span className="text-gray-400">answer: </span><span className="font-bold">{pr.answer}</span></span>
+													<span><span className="text-gray-400">answer: </span><span className="font-bold"><AnswerText answer={pr.answer} /></span></span>
 													{!pr.correct && pr.submittedAnswer && (
 														<span className="text-gray-400"> — said "{pr.submittedAnswer}"</span>
 													)}

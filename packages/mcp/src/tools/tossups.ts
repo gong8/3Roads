@@ -6,7 +6,7 @@ const log = createLogger("mcp:tools");
 
 const tossupShape = {
   question: z.string().describe("The tossup question text"),
-  answer: z.string().describe("The answer to the tossup"),
+  answer: z.string().describe("The answer to the tossup, with the part a player must say wrapped in {braces}, e.g. \"{Bakerloo} line\""),
   powerMarkIndex: z.number().optional().describe("Character index of the power mark (*)"),
   category: z.string().describe("Question category (e.g., Science, History)"),
   subcategory: z.string().describe("Question subcategory"),

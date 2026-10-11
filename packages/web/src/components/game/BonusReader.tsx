@@ -1,3 +1,5 @@
+import { AnswerText } from "../AnswerText";
+
 interface PartResult {
 	partNumber: number;
 	correct: boolean;
@@ -39,7 +41,7 @@ export function BonusReader({ leadin, controllingPlayerName, category, subcatego
 						<span className={`font-bold ${r.correct ? "text-green-700" : "text-red-700"}`}>
 							[{r.points}] {r.correct ? "correct" : "incorrect"}
 						</span>
-						<span className="text-gray-500"> — answer: {r.answer}</span>
+						<span className="text-gray-500"> — answer: <AnswerText answer={r.answer} /></span>
 						{!r.correct && r.submittedAnswer && (
 							<span className="text-gray-400">said "{r.submittedAnswer}"</span>
 						)}

@@ -1,3 +1,5 @@
+import { AnswerText } from "./AnswerText";
+
 interface Props {
   question: string;
   answer: string;
@@ -19,7 +21,7 @@ export function TossupBlock({ question, answer, powerMarkIndex, category, subcat
       <div className="text-xs text-gray-500 mb-1">{category} / {subcategory} — {difficulty}</div>
       <p className="mb-2 whitespace-pre-wrap">{displayQuestion}</p>
       {showAnswer ? (
-        <p className="font-bold">ANSWER: {answer}</p>
+        <p className="font-bold">ANSWER: <AnswerText answer={answer} /></p>
       ) : (
         <button type="button" className="text-gray-500 underline" onClick={onToggleAnswer}>[show answer]</button>
       )}

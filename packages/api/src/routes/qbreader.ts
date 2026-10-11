@@ -101,7 +101,7 @@ function transformPacket(data: Record<string, unknown>, setName: string, packetN
 		id: `qb-t-${t._id ?? i}`,
 		// Keep (*) in text — the game engine already detects it for power scoring
 		question: cleanAnswer(t.question ?? ""),
-		answer: cleanAnswer(t.formatted_answer ?? t.answer ?? ""),
+		answer: cleanFormattedAnswer(t.formatted_answer ?? t.answer ?? ""),
 		powerMarkIndex: null,
 		category: t.category ?? "",
 		subcategory: t.subcategory ?? "",
@@ -147,6 +147,11 @@ function cleanAnswer(s: string): string {
 		.trim();
 }
 
+/** Like cleanAnswer, but keeps QB Reader's underlined required part as {braces}: "<b><u>Bakerloo</u></b> line" → "{Bakerloo} line". */
+function cleanFormattedAnswer(s: string): string {
+	return cleanAnswer(s.replace(/<u>/gi, "{").replace(/<\/u>/gi, "}"));
+}
+
 function normalizeBonusParts(b: QbBonus): BonusData["parts"] {
 	// QB Reader has two formats depending on API version:
 	// New: parts is array of { text, answer, value } objects
@@ -158,7 +163,7 @@ function normalizeBonusParts(b: QbBonus): BonusData["parts"] {
 		return (b.parts as QbBonusPart[]).map((p, j) => ({
 			partNum: j + 1,
 			text: cleanAnswer(p.text ?? ""),
-			answer: cleanAnswer(p.formatted_answer ?? p.answer ?? ""),
+			answer: cleanFormattedAnswer(p.formatted_answer ?? p.answer ?? ""),
 			value: p.value ?? 10,
 		}));
 	}
@@ -167,7 +172,7 @@ function normalizeBonusParts(b: QbBonus): BonusData["parts"] {
 	return (b.parts as string[]).map((text, j) => ({
 		partNum: j + 1,
 		text: cleanAnswer(text),
-		answer: cleanAnswer(b.formatted_answers?.[j] ?? b.answers?.[j] ?? ""),
+		answer: cleanFormattedAnswer(b.formatted_answers?.[j] ?? b.answers?.[j] ?? ""),
 		value: b.values?.[j] ?? 10,
 	}));
 }

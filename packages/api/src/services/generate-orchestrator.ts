@@ -11,6 +11,7 @@ const SYSTEM_PROMPT_SUFFIX = [
 	"- NEVER include the answer word, any variant of it, or anything that sounds like it ANYWHERE in the question text. Replace it with a placeholder like 'this country', 'this author', 'this element', 'this work', 'this region', etc. as appropriate. The answer must not be nameable from any word in the question itself.",
 	"- NEVER write clues that transparently give away the answer through etymology, word games, or trivial restatement.",
 	"- Every tossup must be strictly pyramidal: hardest clues first, power mark at 1/3-1/2 through, giveaway last.",
+	"- In every answer field, wrap the part a player MUST say in {curly braces}; everything outside the braces is optional. Examples: \"{Bakerloo} line\", \"Johann Sebastian {Bach}\", \"{Ely}, Cambridgeshire\", \"Battle of {Hastings}\", \"{mitochondria}\". If the whole answer is required, brace all of it: \"{France}\". Alternatives go in square brackets and get braces too: \"{DNA} [accept {deoxyribonucleic acid}]\".",
 ].join("\n");
 
 function buildTossupSystemPrompt(setId: string, difficulty: string, theme: string): string {
