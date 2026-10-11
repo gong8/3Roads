@@ -59,7 +59,10 @@ export function TossupReader({ words, isPowerZone, category, subcategory, questi
 			{words.length > 0 && (
 				<p className="min-h-[3rem]" style={{ textWrap: "stable" } as React.CSSProperties}>
 					{words.map(w => w.replace(/\(\*\)/g, "")).join(" ")}
-					<span className="animate-pulse">|</span>
+					{/* Zero-width anchor: the cursor must not take up inline space, or "lastword|" wraps as one unit and the last word jumps lines */}
+					<span className="relative" aria-hidden="true">
+						<span className="absolute left-0 animate-pulse">|</span>
+					</span>
 				</p>
 			)}
 		</div>
