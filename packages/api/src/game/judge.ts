@@ -81,6 +81,13 @@ function localJudge(
 		// Surname match: submitted = last word of a multi-word answer (e.g. "atkinson" for "Rowan Atkinson")
 		const formWords = normalizedForm.split(" ");
 		if (formWords.length > 1 && normalizedSubmitted === formWords[formWords.length - 1]) return "correct";
+
+		// Comma qualifier: "Ely, Cambridgeshire" accepts "ely". Skipped for conjunctive answers,
+		// where the comma separates required parts rather than an optional qualifier.
+		if (form.includes(",") && !/\s+and\s+|&/i.test(form)) {
+			const head = normalize(form.split(",")[0]);
+			if (head && normalizedSubmitted === head) return "correct";
+		}
 	}
 
 	// Everything else goes to LLM
@@ -116,7 +123,7 @@ export async function judgeAnswer(
 		`The canonical answer is: ${canonicalForLlm}`,
 		`The player submitted: ${submittedAnswer}`,
 		`The question was: ${questionText.slice(0, 500)}`,
-		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, adjective/demonym forms (e.g. "Italian" for "Italy"), and surnames alone for person answers (e.g. "Atkinson" is correct for "Rowan Atkinson").`,
+		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, adjective/demonym forms (e.g. "Italian" for "Italy"), and surnames alone for person answers (e.g. "Atkinson" is correct for "Rowan Atkinson"). Qualifiers in the canonical answer are optional: a place given with its region or country (e.g. "Ely" is correct for "Ely, Cambridgeshire"), or a title or disambiguation after a comma.`,
 	].join("\n");
 
 	try {
