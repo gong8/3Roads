@@ -33,7 +33,25 @@ function parseAcceptableAnswers(canonical: string): string[] {
 	return answers;
 }
 
-/** Normalize an answer for comparison: lowercase, strip articles/punctuation, collapse whitespace. */
+const ROMAN_VALUES: Record<string, number> = { i: 1, v: 5, x: 10 };
+
+/** "iv" \u2192 "4" for numerals I\u2013XXXIX (regnal numbers, sequels); any other word is returned unchanged. */
+function romanToArabic(word: string): string {
+	if (!/^x{0,3}(ix|iv|v?i{0,3})$/.test(word) || !word) return word;
+	let total = 0;
+	for (let i = 0; i < word.length; i++) {
+		const value = ROMAN_VALUES[word[i]];
+		const next = ROMAN_VALUES[word[i + 1]] ?? 0;
+		total += value < next ? -value : value;
+	}
+	return String(total);
+}
+
+/**
+ * Normalize an answer for comparison: lowercase, strip articles/punctuation, collapse whitespace.
+ * Roman numerals become digits ("James I" = "james 1") and a plural "s" is dropped from each word
+ * ("war of the roses" = "Wars of the Roses"). Both sides go through this, so the folding is symmetric.
+ */
 function normalize(answer: string): string {
 	return answer
 		.toLowerCase()
@@ -43,7 +61,10 @@ function normalize(answer: string): string {
 		.replace(/^(a|an|the)\s+/i, "")
 		.replace(/[^a-z0-9\s]/g, "")
 		.replace(/\s+/g, " ")
-		.trim();
+		.trim()
+		.split(" ")
+		.map((word) => romanToArabic(word).replace(/([^s])s$/, "$1"))
+		.join(" ");
 }
 
 /**
@@ -130,11 +151,11 @@ export async function judgeAnswer(
 	const userPrompt = [
 		`The canonical answer is: ${canonicalForLlm}`,
 		...(canonicalForLlm.includes("{")
-			? ["Text in {braces} is the part the player must give; everything outside the braces is optional."]
+			? ["Text in {braces} is the part the player must give; everything outside the braces is optional. The braces mark the minimum, not an exact string: still accept equivalent forms of the braced text, and treat a qualifier inside the braces like \"of England\" as optional if it was clearly braced by mistake."]
 			: []),
 		`The player submitted: ${submittedAnswer}`,
 		`The question was: ${questionText.slice(0, 500)}`,
-		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, adjective/demonym forms (e.g. "Italian" for "Italy"), and surnames alone for person answers (e.g. "Atkinson" is correct for "Rowan Atkinson"). Qualifiers in the canonical answer are optional: a place given with its region or country (e.g. "Ely" is correct for "Ely, Cambridgeshire"), or a title or disambiguation after a comma.`,
+		`Leniency: ${strictness}/10. At 1, require an exact match. At 10, accept any answer that demonstrates knowledge of the correct answer. At the default of 7, accept reasonable variations like missing articles, minor misspellings, partial but clearly correct answers, adjective/demonym forms (e.g. "Italian" for "Italy"), and surnames alone for person answers (e.g. "Atkinson" is correct for "Rowan Atkinson"). Qualifiers in the canonical answer are optional: a place given with its region or country (e.g. "Ely" is correct for "Ely, Cambridgeshire"), or a title or disambiguation after a comma. Arabic and Roman numerals are equivalent (e.g. \"James 1\" is correct for \"James I\"), and singular/plural differences are fine (e.g. \"War of the Roses\" is correct for \"Wars of the Roses\").`,
 	].join("\n");
 
 	try {
