@@ -14,7 +14,9 @@ const WORKER_PATH = existsSync(WORKER_TS) ? WORKER_TS : WORKER_JS;
 
 // In-memory audio cache with auto-cleanup
 const audioCache = new Map<string, { buffer: Buffer; expires: number }>();
-const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+// Clips are pregenerated in the lobby and played over the whole game, so this must outlast
+// any game; rooms delete their clips on cleanup and this is only the backstop
+const CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 
 function generateId(): string {
 	return Math.random().toString(36).slice(2, 12) + Date.now().toString(36);

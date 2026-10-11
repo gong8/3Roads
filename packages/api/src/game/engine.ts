@@ -17,6 +17,14 @@ function computeWordDelays(words: string[], totalDurationMs: number): number[] {
 	return words.map(() => perWord);
 }
 
+/** Per-word delays for a passage, using its pregenerated TTS timing when available. */
+function delaysFor(room: GameRoom, ttsKey: string, words: string[]): number[] {
+	const cached = room.settings.ttsEnabled ? room.ttsCache.get(ttsKey) : undefined;
+	if (!cached) return computeWordDelays(words, room.settings.msPerWord * words.length);
+	if (cached.wordDelays && cached.wordDelays.length === words.length) return cached.wordDelays;
+	return computeWordDelays(words, cached.durationMs);
+}
+
 // -- Broadcast helpers --
 
 export function broadcast(room: GameRoom, msg: ServerMessage): void {
@@ -484,7 +492,14 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 	}
 
 	const player = room.players.get(playerId);
-	if (!player) return;
+	if (!player) {
+		// Buzzer disconnected before answering — drop the buzz so the tossup doesn't hang
+		tr.incorrectBuzzers.add(playerId);
+		tr.buzzedPlayerId = null;
+		tr.buzzWordIndex = null;
+		continueAfterMiss(room, tr);
+		return;
+	}
 
 	room.phase = "judging";
 	broadcast(room, { type: "phase_change", phase: "judging" });
@@ -568,17 +583,17 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 		});
 
 		broadcastPlayerList(room);
+		continueAfterMiss(room, tr);
+	}
+}
 
-		// Check if all players have negged
-		const activePlayers = Array.from(room.players.values());
-		const allNegged = activePlayers.every((p) => tr.incorrectBuzzers.has(p.id));
-
-		if (allNegged) {
-			tossupDead(room);
-		} else {
-			// Resume tossup reading
-			resumeTossup(room);
-		}
+/** After a missed buzz: kill the tossup if nobody can still buzz, otherwise keep reading. */
+function continueAfterMiss(room: GameRoom, tr: TossupReading): void {
+	const allNegged = Array.from(room.players.values()).every((p) => tr.incorrectBuzzers.has(p.id));
+	if (allNegged) {
+		tossupDead(room);
+	} else {
+		resumeTossup(room);
 	}
 }
 
@@ -713,7 +728,9 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 				// Brief pause after leadin finishes before first part
 				const avgDelay = leadinTotalMs / leadinWords.length;
 				const leadinPause = room.settings.ttsEnabled ? Math.max(avgDelay, 500) : 1000;
-				setTimeout(() => {
+				// Tracked so pause/skip/end can cancel it
+				br.intervalHandle = setTimeout(() => {
+					br.intervalHandle = null;
 					sendBonusPart(room);
 				}, leadinPause);
 				return;
@@ -912,6 +929,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 	broadcastPlayerList(room);
 
 	br.currentPart++;
+	br.partRevealedCount = 0;
 
 	if (br.currentPart >= br.parts.length) {
 		completeBonus(room);
@@ -950,7 +968,8 @@ function advanceToNextQuestion(room: GameRoom): void {
 }
 
 export function pauseGame(room: GameRoom): void {
-	const pauseablePhases = ["reading_tossup", "reading_bonus", "between_questions", "judging"];
+	// Not "judging": the in-flight judge call would advance the game underneath the pause
+	const pauseablePhases = ["reading_tossup", "reading_bonus", "between_questions"];
 	if (!pauseablePhases.includes(room.phase)) return;
 
 	room.pausedPhase = room.phase;
@@ -986,75 +1005,69 @@ export function resumeGame(room: GameRoom): void {
 
 	const resumePhase = room.pausedPhase;
 	room.pausedPhase = null;
-	room.phase = resumePhase;
 	room.lastActivity = Date.now();
-
-	broadcast(room, { type: "phase_change", phase: resumePhase });
 	log.info(`Room ${room.code} — resumed to ${resumePhase}`);
 
-	// Resume word reveals or answer timers from where we left off
-	if (resumePhase === "reading_tossup") {
-		const tr = room.tossupReading;
-		if (tr && tr.revealedCount < tr.words.length) {
-			const scheduleNext = (index: number) => {
-				if (index >= tr.words.length) return;
-				tr.intervalHandle = setTimeout(() => {
-					revealNextWord(room);
-					scheduleNext(index + 1);
-				}, tr.wordDelays[index]);
-			};
-			scheduleNext(tr.revealedCount);
-		}
-	} else if (resumePhase === "reading_bonus") {
-		const br = room.bonusReading;
-		if (br) {
-			if (br.inLeadin) {
-				// Resume leadin word reveals from current position
-				const leadinWords = br.leadin.split(/\s+/);
-				const leadinDelays = computeWordDelays(leadinWords, room.settings.msPerWord * leadinWords.length);
-				const from = br.leadinRevealedCount;
-				const scheduleNext = (i: number) => {
-					if (i >= leadinWords.length) {
-						br.intervalHandle = null;
-						br.inLeadin = false;
-						const leadinPause = 1000;
-						setTimeout(() => { sendBonusPart(room); }, leadinPause);
-						return;
-					}
-					br.intervalHandle = setTimeout(() => {
-						broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
-						br.leadinRevealedCount = i + 1;
-						scheduleNext(i + 1);
-					}, leadinDelays[i]);
-				};
-				scheduleNext(from);
-			} else {
-				// Resume part word reveals from current position (no bonus_part re-broadcast)
-				const part = br.parts[br.currentPart];
-				const partWords = part.text.split(/\s+/);
-				const partDelays = computeWordDelays(partWords, room.settings.msPerWord * partWords.length);
-				const from = br.partRevealedCount;
-				if (from >= partWords.length) {
-					// All words already revealed, just open answering
-					openBonusAnswering(room, br);
-				} else {
-					const scheduleNext = (i: number) => {
-						if (i >= partWords.length) {
-							br.intervalHandle = null;
-							openBonusAnswering(room, br);
-							return;
-						}
-						br.intervalHandle = setTimeout(() => {
-							broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
-							br.partRevealedCount = i + 1;
-							scheduleNext(i + 1);
-						}, partDelays[i]);
-					};
-					scheduleNext(from);
-				}
-			}
-		}
+	// resumeTossup also restarts the end-of-question buzz window, which a pause would
+	// otherwise swallow and leave the tossup hanging
+	if (resumePhase === "reading_tossup" && room.tossupReading) {
+		resumeTossup(room);
+		return;
 	}
+
+	room.phase = resumePhase;
+	broadcast(room, { type: "phase_change", phase: resumePhase });
+
+	const br = room.bonusReading;
+	if (resumePhase !== "reading_bonus" || !br) return;
+
+	if (br.inLeadin) {
+		// Resume leadin word reveals from current position
+		const leadinWords = br.leadin.split(/\s+/);
+		const leadinDelays = delaysFor(room, `bonus-leadin:${room.bonuses[br.bonusIndex].id}`, leadinWords);
+		const scheduleNext = (i: number) => {
+			if (i >= leadinWords.length) {
+				br.inLeadin = false;
+				br.intervalHandle = setTimeout(() => {
+					br.intervalHandle = null;
+					sendBonusPart(room);
+				}, 1000);
+				return;
+			}
+			br.intervalHandle = setTimeout(() => {
+				broadcast(room, { type: "bonus_word_reveal", word: leadinWords[i] });
+				br.leadinRevealedCount = i + 1;
+				scheduleNext(i + 1);
+			}, leadinDelays[i]);
+		};
+		scheduleNext(br.leadinRevealedCount);
+		return;
+	}
+
+	if (br.partRevealedCount === 0) {
+		// Paused between the leadin and the part (or before its first word): start the part fresh
+		sendBonusPart(room);
+		return;
+	}
+
+	// Resume part word reveals from current position (no bonus_part re-broadcast)
+	const bonus = room.bonuses[br.bonusIndex];
+	const partWords = br.parts[br.currentPart].text.split(/\s+/);
+	const partNum = bonus.parts[br.currentPart]?.partNum ?? br.currentPart + 1;
+	const partDelays = delaysFor(room, `bonus-part:${bonus.id}:${partNum}`, partWords);
+	const scheduleNext = (i: number) => {
+		if (i >= partWords.length) {
+			br.intervalHandle = null;
+			openBonusAnswering(room, br);
+			return;
+		}
+		br.intervalHandle = setTimeout(() => {
+			broadcast(room, { type: "bonus_word_reveal", word: partWords[i] });
+			br.partRevealedCount = i + 1;
+			scheduleNext(i + 1);
+		}, partDelays[i]);
+	};
+	scheduleNext(br.partRevealedCount);
 }
 
 export function skipQuestion(room: GameRoom): void {
@@ -1094,6 +1107,9 @@ export function endGame(room: GameRoom): void {
 		room.answerTimer = null;
 	}
 
+	// Clearing these makes every pending timer and in-flight judge call bail out
+	room.tossupReading = null;
+	room.bonusReading = null;
 	room.phase = "game_over";
 	room.lastActivity = Date.now();
 

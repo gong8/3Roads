@@ -1,7 +1,7 @@
 import "./load-env.js";
 import { createServer } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { extname, join } from "node:path";
+import { extname, join, resolve, sep } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { createLogger, getDb, initDb } from "@3roads/shared";
 import { Hono } from "hono";
@@ -128,11 +128,15 @@ if (!STATIC_DIR) {
 		".wav": "audio/wav",
 	};
 
+	const STATIC_ROOT = resolve(STATIC_DIR);
+
 	app.get("*", (c) => {
 		const reqPath = c.req.path === "/" ? "/index.html" : c.req.path;
-		const filePath = join(STATIC_DIR, reqPath);
+		// Hono decodes %5C to a backslash, which Windows treats as a separator, so "/..%5c.env" would
+		// escape STATIC_DIR (e.g. to the repo-root .env) without this containment check
+		const filePath = resolve(STATIC_ROOT, `.${reqPath}`);
 		try {
-			if (existsSync(filePath) && statSync(filePath).isFile()) {
+			if (filePath.startsWith(STATIC_ROOT + sep) && existsSync(filePath) && statSync(filePath).isFile()) {
 				const content = readFileSync(filePath);
 				const mime = MIME[extname(filePath)] || "application/octet-stream";
 				return c.body(content, 200, { "Content-Type": mime });

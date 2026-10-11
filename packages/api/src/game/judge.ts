@@ -121,8 +121,9 @@ export async function judgeAnswer(
 
 	try {
 		const result = await fetchJudge(systemPrompt, userPrompt);
-		const correct = result.trim().toLowerCase().includes("correct") &&
-			!result.trim().toLowerCase().startsWith("incorrect");
+		// Word-boundary checks: "**Incorrect**" or "The answer is incorrect." must not read as correct
+		const verdict = result.toLowerCase();
+		const correct = /\bcorrect\b/.test(verdict) && !/\b(incorrect|not correct)\b/.test(verdict);
 		log.info(`judge [llm] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${correct ? "correct" : "incorrect"}`);
 		return { correct };
 	} catch (err) {

@@ -78,11 +78,14 @@ export function useGameAudio(state: GameState, sendAudioReady: () => void): void
 		const a = audioRef.current;
 		if (!a) return;
 
-		if (phase === "awaiting_answer") {
-			console.log("[tts] pause (awaiting_answer)");
+		if (phase === "awaiting_answer" || phase === "paused") {
+			console.log("[tts] pause (", phase, ")");
 			a.pause();
-		} else if (phase === "reading_tossup" && (prev === "judging" || prev === "awaiting_answer")) {
-			console.log("[tts] resume (reading_tossup from", prev, ")");
+		} else if (
+			(phase === "reading_tossup" && (prev === "judging" || prev === "awaiting_answer" || prev === "paused")) ||
+			(phase === "reading_bonus" && prev === "paused")
+		) {
+			console.log("[tts] resume (", phase, "from", prev, ")");
 			a.play().catch(() => {});
 		} else if (phase !== prev && (phase === "between_questions" || phase === "game_over" || phase === "lobby")) {
 			console.log("[tts] stop (phase:", phase, ")");
