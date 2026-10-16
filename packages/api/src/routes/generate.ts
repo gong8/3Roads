@@ -2,17 +2,10 @@ import { createLogger, getDb } from "@3roads/shared";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { canUseModel, isOpenRouterModel, streamLlmChat } from "../services/llm-chat.js";
+import { canUseModel, modelUnavailableMessage, streamLlmChat } from "../services/llm-chat.js";
 import { MAX_SET_QUESTIONS, runGeneration } from "../services/generate-orchestrator.js";
 import { startStream, subscribe } from "../services/stream-manager.js";
 import { currentUser } from "../services/user-auth.js";
-
-/** Why a model can't run: ChatGPT models need the user's plan, OpenRouter models the server key. */
-function modelUnavailableMessage(model?: string): string {
-	return isOpenRouterModel(model)
-		? "OpenRouter models aren't available on this server (no OPENROUTER_API_KEY)"
-		: "Connect ChatGPT in settings to generate with this model, or pick an OpenRouter model";
-}
 
 const log = createLogger("api:generate");
 

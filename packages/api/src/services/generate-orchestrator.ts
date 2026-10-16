@@ -314,6 +314,118 @@ async function removeDuplicateTossups(setId: string): Promise<void> {
 	if (duplicateIds.length > 0) await db.tossup.deleteMany({ where: { id: { in: duplicateIds } } });
 }
 
+/** Answers to write questions for, chosen up front so batches written in parallel never collide. */
+async function planAnswers(params: {
+	theme: string;
+	difficulty: string;
+	tossupCount: number;
+	bonusCount: number;
+	/** Answers already used (e.g. earlier in an infinite game); the plan must avoid them */
+	excludeAnswers?: string[];
+	model?: string;
+	userId: string;
+	onCost?: (usd: number) => void;
+}): Promise<{ tossupAnswers: string[]; bonusAnswers: string[] }> {
+	const { theme, difficulty, tossupCount, bonusCount, excludeAnswers = [], model, userId, onCost } = params;
+	const excludeClause = excludeAnswers.length > 0
+		? `\nThese answers have already been used, so do NOT use any of them or anything about the same specific subject: ${excludeAnswers.join("; ")}.`
+		: "";
+	const planPrompt = `Generate a JSON object with two arrays:
+- "tossup_answers": ${tossupCount} unique answer strings for tossups about "${theme}" at ${difficulty} difficulty
+- "bonus_answers": ${bonusCount} unique answer strings for bonuses about "${theme}" at ${difficulty} difficulty
+
+Each answer should be a specific, notable topic suitable for a quiz bowl question at the ${difficulty} level.
+All answers must be distinct across both arrays — no duplicates whatsoever.
+Bonus answers must not be about the same specific subject as any tossup answer. If a tossup is about a painting, the bonus must not be about that same painting, its painter, or its depicted subject. Keep tossup and bonus topics clearly separated.${excludeClause}
+Output ONLY the JSON object, no other text, no markdown fences.`;
+
+	const planResult = await runLlmChatSimple({
+		prompt: planPrompt,
+		systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
+		model,
+		userId,
+		onCost,
+	});
+
+	const jsonMatch = planResult.match(/\{[\s\S]*\}/);
+	if (!jsonMatch) throw new Error("Answer planning failed: no JSON found in response");
+
+	const plan = JSON.parse(jsonMatch[0]) as {
+		tossup_answers: string[];
+		bonus_answers: string[];
+	};
+
+	if (!plan.tossup_answers?.length && tossupCount > 0) throw new Error("Answer planning returned no tossup answers");
+	if (!plan.bonus_answers?.length && bonusCount > 0) throw new Error("Answer planning returned no bonus answers");
+
+	return {
+		tossupAnswers: (plan.tossup_answers ?? []).slice(0, tossupCount),
+		bonusAnswers: (plan.bonus_answers ?? []).slice(0, bonusCount),
+	};
+}
+
+/** One LLM call per batch of planned answers; each call saves its questions into the set. */
+function writeJobs(params: {
+	setId: string;
+	theme: string;
+	difficulty: string;
+	tossupAnswers: string[];
+	bonusAnswers: string[];
+	model?: string;
+	userId: string;
+	onCost?: (usd: number) => void;
+}): (() => Promise<unknown>)[] {
+	const { setId, theme, difficulty, tossupAnswers, bonusAnswers, model, userId, onCost } = params;
+	const jobs: (() => Promise<unknown>)[] = [];
+
+	for (const batch of chunk(tossupAnswers, TOSSUPS_PER_BATCH)) {
+		const answerList = batch.join("\n- ");
+		const tossupPrompt = `Write ${batch.length} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — every sentence must refer to the subject as 'this person', 'this country', 'this work', 'this element', etc., and the first sentence must not reveal its namesake, word origin, or most famous fact. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
+
+		jobs.push(() =>
+			runLlmChat({
+				prompt: tossupPrompt,
+				systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
+				model,
+				userId,
+				setId,
+				onCost,
+			}),
+		);
+	}
+
+	for (const batch of chunk(bonusAnswers, BONUSES_PER_BATCH)) {
+		const answerList = batch.join("\n- ");
+		const bonusPrompt = `Write ${batch.length} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
+
+		jobs.push(() =>
+			runLlmChat({
+				prompt: bonusPrompt,
+				systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
+				model,
+				userId,
+				setId,
+				onCost,
+			}),
+		);
+	}
+
+	return jobs;
+}
+
+/** Error messages from settled write jobs: rejections, and runs that finished but reported failure. */
+function jobErrors(results: PromiseSettledResult<unknown>[]): string[] {
+	const errors: string[] = [];
+	for (const r of results) {
+		if (r.status === "rejected") {
+			errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
+		} else if (r.value && typeof r.value === "object" && "ok" in r.value && !(r.value as { ok: boolean }).ok) {
+			errors.push((r.value as { error?: string }).error || "Unknown CLI error");
+		}
+	}
+	return errors;
+}
+
 export async function runGeneration(params: {
 	setId: string;
 	theme: string;
@@ -348,76 +460,20 @@ export async function runGeneration(params: {
 		// Phase 1: Answer Planning (regular tossups + bonuses)
 		log.info(`[${setId}] Phase 1: generating answer plan (${writtenTossupCount} written tossups, ${bonusCount} bonuses, ${pictureCount} picture)`);
 
-		const planPrompt = `Generate a JSON object with two arrays:
-- "tossup_answers": ${writtenTossupCount} unique answer strings for tossups about "${theme}" at ${difficulty} difficulty
-- "bonus_answers": ${bonusCount} unique answer strings for bonuses about "${theme}" at ${difficulty} difficulty
-
-Each answer should be a specific, notable topic suitable for a quiz bowl question at the ${difficulty} level.
-All answers must be distinct across both arrays — no duplicates whatsoever.
-Bonus answers must not be about the same specific subject as any tossup answer. If a tossup is about a painting, the bonus must not be about that same painting, its painter, or its depicted subject. Keep tossup and bonus topics clearly separated.
-Output ONLY the JSON object, no other text, no markdown fences.`;
-
-		const jobs: (() => Promise<unknown>)[] = [];
+		let jobs: (() => Promise<unknown>)[] = [];
 		const plannedAnswers: string[] = [];
 
 		if (writtenTossupCount > 0 || bonusCount > 0) {
-			const planResult = await runLlmChatSimple({
-				prompt: planPrompt,
-				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
-				model,
-				userId,
-				onCost,
+			const { tossupAnswers, bonusAnswers } = await planAnswers({
+				theme, difficulty, tossupCount: writtenTossupCount, bonusCount, model, userId, onCost,
 			});
+			plannedAnswers.push(...tossupAnswers, ...bonusAnswers);
 
-			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
-			if (!jsonMatch) throw new Error("Answer planning failed: no JSON found in response");
-
-			const plan = JSON.parse(jsonMatch[0]) as {
-				tossup_answers: string[];
-				bonus_answers: string[];
-			};
-
-			if (!plan.tossup_answers?.length && writtenTossupCount > 0) throw new Error("Answer planning returned no tossup answers");
-			if (!plan.bonus_answers?.length && bonusCount > 0) throw new Error("Answer planning returned no bonus answers");
-
-			plannedAnswers.push(...(plan.tossup_answers ?? []).slice(0, writtenTossupCount), ...(plan.bonus_answers ?? []).slice(0, bonusCount));
-
-			log.info(`[${setId}] Phase 1 complete: ${plan.tossup_answers?.length ?? 0} tossup answers, ${plan.bonus_answers?.length ?? 0} bonus answers`);
+			log.info(`[${setId}] Phase 1 complete: ${tossupAnswers.length} tossup answers, ${bonusAnswers.length} bonus answers`);
 
 			// Phase 2: Parallel Question Writing, in batches
 			log.info(`[${setId}] Phase 2: writing questions in batches of ${TOSSUPS_PER_BATCH} tossups / ${BONUSES_PER_BATCH} bonuses`);
-
-			for (const batch of chunk((plan.tossup_answers ?? []).slice(0, writtenTossupCount), TOSSUPS_PER_BATCH)) {
-				const answerList = batch.join("\n- ");
-				const tossupPrompt = `Write ${batch.length} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — every sentence must refer to the subject as 'this person', 'this country', 'this work', 'this element', etc., and the first sentence must not reveal its namesake, word origin, or most famous fact. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
-
-				jobs.push(() =>
-					runLlmChat({
-						prompt: tossupPrompt,
-						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
-						model,
-						userId,
-						setId,
-						onCost,
-					}),
-				);
-			}
-
-			for (const batch of chunk((plan.bonus_answers ?? []).slice(0, bonusCount), BONUSES_PER_BATCH)) {
-				const answerList = batch.join("\n- ");
-				const bonusPrompt = `Write ${batch.length} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
-
-				jobs.push(() =>
-					runLlmChat({
-						prompt: bonusPrompt,
-						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
-						model,
-						userId,
-						setId,
-						onCost,
-					}),
-				);
-			}
+			jobs = writeJobs({ setId, theme, difficulty, tossupAnswers, bonusAnswers, model, userId, onCost });
 		}
 
 		// Picture tossups go first in the queue: they retry internally and take the longest
@@ -430,14 +486,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		const results = await settleLimited(jobs, MAX_PARALLEL_CALLS);
 		await removeDuplicateTossups(setId);
 
-		const errors: string[] = [];
-		for (const r of results) {
-			if (r.status === "rejected") {
-				errors.push(r.reason instanceof Error ? r.reason.message : String(r.reason));
-			} else if (r.value && typeof r.value === "object" && "ok" in r.value && !(r.value as { ok: boolean }).ok) {
-				errors.push((r.value as { error?: string }).error || "Unknown CLI error");
-			}
-		}
+		const errors = jobErrors(results);
 
 		if (errors.length > 0) {
 			log.error(`[${setId}] Phase 2 errors: ${errors.join("; ")}`);
