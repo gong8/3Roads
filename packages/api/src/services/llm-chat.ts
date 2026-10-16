@@ -42,6 +42,18 @@ export const OPENROUTER_MODELS = [
 ];
 export const DEFAULT_OPENROUTER_MODEL = process.env.OPENROUTER_MODEL || OPENROUTER_MODELS[0].slug;
 
+// The server's key pays for OpenRouter, so only these models may run on it: the listed
+// ones plus whatever the operator configured. A client can't name an expensive model.
+const ALLOWED_OPENROUTER_MODELS = new Set([
+	...OPENROUTER_MODELS.map((m) => m.slug),
+	DEFAULT_OPENROUTER_MODEL,
+	...(process.env.OPENROUTER_JUDGE_MODEL ? [process.env.OPENROUTER_JUDGE_MODEL] : []),
+]);
+
+export function isAllowedOpenRouterModel(model: string): boolean {
+	return ALLOWED_OPENROUTER_MODELS.has(model);
+}
+
 export function openRouterEnabled(): boolean {
 	return !!process.env.OPENROUTER_API_KEY;
 }
@@ -77,7 +89,7 @@ export function modelUnavailableMessage(model?: string): string {
 
 /** Whether this user can run this model: OpenRouter needs the server key, ChatGPT models a connected plan. */
 export async function canUseModel(userId: string, model?: string): Promise<boolean> {
-	if (isOpenRouterModel(model)) return openRouterEnabled();
+	if (isOpenRouterModel(model)) return openRouterEnabled() && isAllowedOpenRouterModel(model as string);
 	return !!(await getAccessToken(userId).catch(() => null));
 }
 
@@ -404,6 +416,10 @@ async function runOpenRouterLoop(options: {
 	setId?: string;
 	onCost?: (usd: number) => void;
 }): Promise<string> {
+	// Every OpenRouter call comes through here, so the allowlist holds for every caller.
+	if (!isAllowedOpenRouterModel(options.model)) {
+		throw new LlmError(`Model ${options.model} is not available`, "model_not_allowed");
+	}
 	const messages: ChatMessage[] = [
 		{ role: "system", content: options.systemPrompt },
 		{ role: "user", content: options.prompt },
