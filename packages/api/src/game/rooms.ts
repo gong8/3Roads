@@ -1,6 +1,7 @@
 import { createLogger, getDb } from "@3roads/shared";
 import type { WebSocket } from "ws";
 import { socketUsers } from "./socket-users.js";
+import { deleteAudio } from "./tts.js";
 import type { BonusData, ExternalPacket, GameMode, GameRoom, Player, TossupData } from "./types.js";
 
 const log = createLogger("api:game:rooms");
@@ -282,6 +283,7 @@ function cleanupRoom(roomCode: string): void {
 		room.ttsAbort.abort();
 		room.ttsAbort = null;
 	}
+	for (const { audioId } of room.ttsCache.values()) deleteAudio(audioId);
 
 	activeRooms.delete(roomCode);
 	log.info(`Room ${roomCode} cleaned up`);

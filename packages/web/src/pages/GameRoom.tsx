@@ -28,6 +28,8 @@ interface CreateState {
 interface JoinState {
 	action: "join";
 	playerName: string;
+	/** Carried over from a create so the host keeps their settings after a refresh */
+	ttsEnabled?: boolean;
 }
 
 type LocationState = CreateState | JoinState | null;
@@ -94,10 +96,16 @@ export function GameRoom() {
 		};
 	}, [disconnect]);
 
-	// When room is created, update URL to actual room code
+	// When room is created, update URL to actual room code. The history state becomes a join
+	// so that a refresh rejoins this room (reclaiming the host's seat) instead of creating another
 	useEffect(() => {
-		if (state.roomCode && roomCode === "new") {
-			navigate(`/play/${state.roomCode}`, { replace: true, state: locationState });
+		if (state.roomCode && roomCode === "new" && locationState) {
+			const rejoin: JoinState = {
+				action: "join",
+				playerName: locationState.playerName,
+				ttsEnabled: locationState.ttsEnabled,
+			};
+			navigate(`/play/${state.roomCode}`, { replace: true, state: rejoin });
 		}
 	}, [state.roomCode, roomCode, navigate, locationState]);
 
@@ -114,7 +122,7 @@ export function GameRoom() {
 
 	const myPlayer = state.players.find((p) => p.id === state.playerId);
 	const isTeamMode = state.players.some((p) => p.team != null);
-	const ttsEnabled = locationState?.action === "create" ? (locationState.ttsEnabled ?? false) : false;
+	const ttsEnabled = locationState?.ttsEnabled ?? false;
 
 	const canBuzz = state.phase === "reading_tossup" && !state.neggedPlayerIds.has(state.playerId ?? "");
 	const isMyBuzz = state.awaitAnswer?.playerId === state.playerId;
