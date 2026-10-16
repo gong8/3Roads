@@ -308,7 +308,7 @@ async function handleSubmitBonusAnswer(ws: WebSocket, answer: string): Promise<v
 		}
 	}
 
-	await handleBonusAnswer(ctx.room, answer);
+	await handleBonusAnswer(ctx.room, answer, ctx.playerId);
 }
 
 function handleNextQuestion(ws: WebSocket): void {

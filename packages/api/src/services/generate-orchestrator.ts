@@ -186,9 +186,9 @@ async function generatePictureTossups(params: {
 	difficulty: string;
 	/** Answers already used elsewhere in the set; picture topics must not repeat them */
 	excludeAnswers: string[];
-	onCost?: (usd: number) => void;
+	userId: string;
 }): Promise<void> {
-	const { setId, count, theme, difficulty, excludeAnswers, onCost } = params;
+	const { setId, count, theme, difficulty, excludeAnswers, userId } = params;
 	const db = getDb();
 
 	const MAX_ATTEMPTS = 3;
@@ -239,7 +239,7 @@ Output ONLY a JSON array, no markdown. Example:
 			const raw = await runLlmChatSimple({
 				prompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
-				onCost,
+				userId,
 			});
 			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
 			const parsed = JSON.parse(cleaned) as PictureTopic[];
@@ -318,19 +318,16 @@ export async function runGeneration(params: {
 	bonusCount: number;
 	pictureCount?: number;
 	model?: string;
+	/** The user whose ChatGPT plan pays for this run. */
+	userId: string;
 }): Promise<void> {
-	const { setId, theme, difficulty, model } = params;
+	const { setId, theme, difficulty, model, userId } = params;
 	const tossupCount = Math.min(params.tossupCount, MAX_SET_QUESTIONS);
 	const bonusCount = Math.min(params.bonusCount, MAX_SET_QUESTIONS);
 	const pictureCount = Math.min(params.pictureCount ?? 0, tossupCount);
 	// Picture questions are drawn from the tossup budget; written tossups fill the remainder
 	const writtenTossupCount = Math.max(0, tossupCount - pictureCount);
 	const db = getDb();
-	// Total OpenRouter spend across every LLM call for this set
-	let cost = 0;
-	const onCost = (usd: number) => {
-		cost += usd;
-	};
 
 	try {
 		await db.questionSet.update({
@@ -357,7 +354,8 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 			const planResult = await runLlmChatSimple({
 				prompt: planPrompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
-				onCost,
+				model,
+				userId,
 			});
 
 			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
@@ -387,7 +385,8 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						prompt: tossupPrompt,
 						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
 						model,
-						onCost,
+						userId,
+						setId,
 					}),
 				);
 			}
@@ -401,7 +400,8 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						prompt: bonusPrompt,
 						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
 						model,
-						onCost,
+						userId,
+						setId,
 					}),
 				);
 			}
@@ -410,7 +410,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		// Picture tossups go first in the queue: they retry internally and take the longest
 		if (pictureCount > 0) {
 			jobs.unshift(() =>
-				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, excludeAnswers: plannedAnswers, onCost }),
+				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, excludeAnswers: plannedAnswers, userId }),
 			);
 		}
 
@@ -428,15 +428,15 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		if (errors.length > 0) {
 			log.error(`[${setId}] Phase 2 errors: ${errors.join("; ")}`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
+			await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
 		} else {
-			log.info(`[${setId}] Generation complete — cost=$${cost.toFixed(4)}`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "complete", cost } });
+			log.info(`[${setId}] Generation complete`);
+			await db.questionSet.update({ where: { id: setId }, data: { status: "complete" } });
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		log.error(`[${setId}] Generation failed: ${msg}`);
-		await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
+		await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
 	}
 
 	// Clean up sets that ended up with no questions at all

@@ -112,7 +112,7 @@ export function useGenerate() {
           // 404: the server deletes sets that finish with no questions (see
           // generate-orchestrator), often before we observe status "error".
           // Other errors are transient — keep trying.
-          if ((err as Error).message === "API error 404") {
+          if ((err as { status?: number }).status === 404) {
             stopPolling();
             setState((s) => ({
               ...s,
