@@ -68,6 +68,13 @@ export function isOpenRouterModel(model?: string): boolean {
 	return !!model?.includes("/");
 }
 
+/** Why a model can't run: ChatGPT models need the user's plan, OpenRouter models the server key. */
+export function modelUnavailableMessage(model?: string): string {
+	return isOpenRouterModel(model)
+		? "OpenRouter models aren't available on this server (no OPENROUTER_API_KEY)"
+		: "Connect ChatGPT in settings to generate with this model, or pick an OpenRouter model";
+}
+
 /** Whether this user can run this model: OpenRouter needs the server key, ChatGPT models a connected plan. */
 export async function canUseModel(userId: string, model?: string): Promise<boolean> {
 	if (isOpenRouterModel(model)) return openRouterEnabled();
