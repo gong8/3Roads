@@ -255,3 +255,15 @@ test("rooms: a dropped seat goes back only to the same account, not to anyone us
 	assert.equal(room.players.get(playerId)?.isModerator, true);
 	activeRooms.delete(room.code);
 });
+
+test("game sockets: same-host pages and listed origins only", async () => {
+	const { ownOrigin } = await import("./services/user-auth.js");
+	assert.equal(ownOrigin("https://3roads.nelsongong.com", "3roads.nelsongong.com"), true);
+	assert.equal(ownOrigin("https://box.nelsongong.com", "box.nelsongong.com"), true);
+	assert.equal(ownOrigin("http://localhost:7003", "localhost:7001"), true, "dev: page and API on different ports");
+	assert.equal(ownOrigin("http://localhost:7003", "127.0.0.1:9130"), true, "listed in CLERK_AUTHORIZED_PARTIES");
+	assert.equal(ownOrigin("https://evil.example", "3roads.nelsongong.com"), false);
+	assert.equal(ownOrigin("https://3roads.nelsongong.com.evil.example", "3roads.nelsongong.com"), false);
+	assert.equal(ownOrigin(undefined, "3roads.nelsongong.com"), false);
+	assert.equal(ownOrigin("null", "3roads.nelsongong.com"), false);
+});

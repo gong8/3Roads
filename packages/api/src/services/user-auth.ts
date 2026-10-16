@@ -10,12 +10,29 @@ import type { Context, Next } from "hono";
 const log = createLogger("api:user-auth");
 
 const JWT_KEY = process.env.CLERK_JWT_KEY?.replace(/\\n/g, "\n");
-// Origins allowed to present session tokens (Clerk's `azp` check), and to open game sockets.
-export const AUTHORIZED_PARTIES = (process.env.CLERK_AUTHORIZED_PARTIES ?? "http://localhost:7003")
+// Optional tightening: when set, only sessions minted for these origins are accepted
+// (Clerk's `azp` check), and these origins may also open game sockets. Unset works out
+// of the box: any session from this Clerk instance, and same-host game sockets.
+export const AUTHORIZED_PARTIES = (process.env.CLERK_AUTHORIZED_PARTIES ?? "")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
 if (!JWT_KEY) log.error("CLERK_JWT_KEY is not set: every request will be treated as signed out");
+
+/**
+ * True when the page that opened the socket is ours: same host name as the server
+ * (ports may differ, as in dev where the page is on :7003 and the API on :7001),
+ * or listed in CLERK_AUTHORIZED_PARTIES.
+ */
+export function ownOrigin(origin: string | undefined, host: string | undefined): boolean {
+	if (!origin) return false;
+	if (AUTHORIZED_PARTIES.includes(origin)) return true;
+	try {
+		return new URL(origin).hostname === new URL(`http://${host}`).hostname;
+	} catch {
+		return false;
+	}
+}
 
 export interface SessionUser {
 	id: string;
@@ -39,7 +56,10 @@ export async function userFromHeaders(authorization: string | undefined, cookie:
 	if (!token || !JWT_KEY) return null;
 	let payload: { sub?: string; email?: unknown };
 	try {
-		payload = await verifyToken(token, { jwtKey: JWT_KEY, authorizedParties: AUTHORIZED_PARTIES });
+		payload = await verifyToken(token, {
+			jwtKey: JWT_KEY,
+			...(AUTHORIZED_PARTIES.length > 0 ? { authorizedParties: AUTHORIZED_PARTIES } : {}),
+		});
 	} catch {
 		return null;
 	}

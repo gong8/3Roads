@@ -1,7 +1,7 @@
 import type { Server } from "node:http";
 import { createLogger } from "@3roads/shared";
 import { WebSocketServer } from "ws";
-import { AUTHORIZED_PARTIES, userFromHeaders } from "../services/user-auth.js";
+import { ownOrigin, userFromHeaders } from "../services/user-auth.js";
 import { socketUsers } from "./socket-users.js";
 import { handleConnection } from "./ws-handler.js";
 import { activeRooms } from "./rooms.js";
@@ -20,7 +20,7 @@ export function attachGameWebSocket(server: Server): void {
 		}
 		// Browsers attach cookies to WebSocket handshakes from any site and CORS doesn't
 		// apply, so only our own pages may open a game socket (no cross-site hijacking).
-		if (!AUTHORIZED_PARTIES.includes(request.headers.origin ?? "")) {
+		if (!ownOrigin(request.headers.origin, request.headers.host)) {
 			socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
 			return;
 		}

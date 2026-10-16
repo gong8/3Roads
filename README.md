@@ -102,7 +102,7 @@ The server verifies sessions offline with the JWT public key, so it never needs 
 |----------|-------|---------|
 | `VITE_CLERK_PUBLISHABLE_KEY` | web build | Clerk publishable key (public) |
 | `CLERK_JWT_KEY` | API | Clerk JWT public key (PEM; `\n` escapes are accepted) |
-| `CLERK_AUTHORIZED_PARTIES` | API | Comma-separated origins allowed to present sessions, e.g. `https://3roads.nelsongong.com` (default `http://localhost:7003`) |
+| `CLERK_AUTHORIZED_PARTIES` | API | Optional. Comma-separated origins, e.g. `https://3roads.nelsongong.com`. When set, only sessions minted for these origins are accepted. Unset works: game sockets are always limited to pages on the server's own host name |
 
 ## ChatGPT for inference
 
