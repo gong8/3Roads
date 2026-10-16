@@ -327,6 +327,7 @@ export async function startTossup(room: GameRoom): Promise<void> {
 		buzzWordIndex: null,
 		incorrectBuzzers: new Set(),
 		isPicture: !!tossup.imageUrl,
+		promptCount: 0,
 	};
 
 	room.phase = "reading_tossup";
@@ -458,15 +459,21 @@ export function handleBuzz(room: GameRoom, playerId: string): void {
 
 	tr.buzzedPlayerId = playerId;
 	tr.buzzWordIndex = tr.revealedCount;
+	tr.promptCount = 0;
 
+	broadcast(room, { type: "player_buzzed", playerId, playerName: player.name });
+	openTossupAnswering(room, tr, player);
+}
+
+/** Give the buzzed player an answer window — after a buzz, or again after a prompt. */
+function openTossupAnswering(room: GameRoom, tr: TossupReading, player: Player): void {
 	room.phase = "awaiting_answer";
 	room.lastActivity = Date.now();
 
 	broadcast(room, { type: "phase_change", phase: "awaiting_answer" });
-	broadcast(room, { type: "player_buzzed", playerId, playerName: player.name });
 	broadcast(room, {
 		type: "await_answer",
-		playerId,
+		playerId: player.id,
 		playerName: player.name,
 		timeMs: room.settings.answerTimeMs,
 	});
@@ -475,11 +482,14 @@ export function handleBuzz(room: GameRoom, playerId: string): void {
 	room.answerTimerDuration = room.settings.answerTimeMs + 1000;
 	room.answerTimerStartedAt = Date.now();
 	room.answerTimer = setTimeout(() => {
-		if (room.phase === "awaiting_answer" && tr.buzzedPlayerId === playerId) {
-			handleAnswer(room, playerId, "");
+		if (room.phase === "awaiting_answer" && tr.buzzedPlayerId === player.id) {
+			handleAnswer(room, player.id, "");
 		}
 	}, room.answerTimerDuration);
 }
+
+/** Prompts allowed per buzz (or bonus part) before a promptable answer counts as wrong. */
+const MAX_PROMPTS = 2;
 
 export async function handleAnswer(room: GameRoom, playerId: string, answer: string): Promise<void> {
 	const tr = room.tossupReading;
@@ -508,7 +518,7 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 	const bonusIndex = room.currentQuestionIndex;
 	const questionText = tr.words.slice(0, tr.revealedCount).join(" ");
 
-	const { correct } = await judgeAnswer(
+	const { verdict } = await judgeAnswer(
 		answer,
 		tossup.answer,
 		questionText,
@@ -520,7 +530,14 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 
 	room.lastActivity = Date.now();
 
-	if (correct) {
+	if (verdict === "prompt" && tr.promptCount < MAX_PROMPTS) {
+		tr.promptCount++;
+		broadcast(room, { type: "answer_prompt", playerId, playerName: player.name, answer, isBonus: false });
+		openTossupAnswering(room, tr, player);
+		return;
+	}
+
+	if (verdict === "correct") {
 		// buzzWordIndex = revealedCount at buzz time (already past the last revealed word).
 		// powerMarkWordIndex is the index of the (*) word. A buzz is a power if it happened
 		// before OR during the (*) reveal window, i.e. buzzWordIndex <= powerMarkWordIndex + 1.
@@ -669,6 +686,7 @@ async function startBonus(room: GameRoom, controllingPlayerId: string, bonusInde
 		inLeadin: true,
 		leadinRevealedCount: 0,
 		partRevealedCount: 0,
+		promptCount: 0,
 	};
 
 	room.phase = "reading_bonus";
@@ -889,7 +907,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 	room.phase = "judging";
 	broadcast(room, { type: "phase_change", phase: "judging" });
 
-	const { correct } = await judgeAnswer(
+	const { verdict } = await judgeAnswer(
 		answer,
 		part.answer,
 		part.text,
@@ -900,6 +918,22 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 	if (room.bonusReading !== br) return;
 
 	room.lastActivity = Date.now();
+
+	if (verdict === "prompt" && br.promptCount < MAX_PROMPTS) {
+		br.promptCount++;
+		const controlling = room.players.get(br.controllingPlayerId);
+		broadcast(room, {
+			type: "answer_prompt",
+			playerId: br.controllingPlayerId,
+			playerName: controlling?.name ?? "",
+			answer,
+			isBonus: true,
+		});
+		openBonusAnswering(room, br);
+		return;
+	}
+
+	const correct = verdict === "correct";
 	br.partScores[br.currentPart] = correct;
 
 	const points = correct ? part.value : 0;
@@ -930,6 +964,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 
 	br.currentPart++;
 	br.partRevealedCount = 0;
+	br.promptCount = 0;
 
 	if (br.currentPart >= br.parts.length) {
 		completeBonus(room);

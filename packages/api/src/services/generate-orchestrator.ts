@@ -3,6 +3,38 @@ import { runLlmChat, runLlmChatSimple } from "./llm-chat.js";
 
 const log = createLogger("api:orchestrator");
 
+/** Most tossups (and bonuses) a single set can ask for. */
+export const MAX_SET_QUESTIONS = 50;
+/** Questions written per LLM call — keeps each reply well inside output limits and quality steady. */
+const TOSSUPS_PER_BATCH = 10;
+const BONUSES_PER_BATCH = 5;
+/** LLM calls in flight at once while writing a set. */
+const MAX_PARALLEL_CALLS = 6;
+
+function chunk<T>(items: T[], size: number): T[][] {
+	const chunks: T[][] = [];
+	for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+	return chunks;
+}
+
+/** Like Promise.allSettled over thunks, but with at most `limit` running at once. */
+async function settleLimited<T>(jobs: (() => Promise<T>)[], limit: number): Promise<PromiseSettledResult<T>[]> {
+	const results: PromiseSettledResult<T>[] = new Array(jobs.length);
+	let next = 0;
+	const worker = async () => {
+		while (next < jobs.length) {
+			const i = next++;
+			try {
+				results[i] = { status: "fulfilled", value: await jobs[i]() };
+			} catch (reason) {
+				results[i] = { status: "rejected", reason };
+			}
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, jobs.length) }, worker));
+	return results;
+}
+
 const SYSTEM_PROMPT_SUFFIX = [
 	"",
 	"IMPORTANT CONSTRAINTS:",
@@ -287,7 +319,10 @@ export async function runGeneration(params: {
 	pictureCount?: number;
 	model?: string;
 }): Promise<void> {
-	const { setId, theme, difficulty, tossupCount, bonusCount, pictureCount = 0, model } = params;
+	const { setId, theme, difficulty, model } = params;
+	const tossupCount = Math.min(params.tossupCount, MAX_SET_QUESTIONS);
+	const bonusCount = Math.min(params.bonusCount, MAX_SET_QUESTIONS);
+	const pictureCount = Math.min(params.pictureCount ?? 0, tossupCount);
 	// Picture questions are drawn from the tossup budget; written tossups fill the remainder
 	const writtenTossupCount = Math.max(0, tossupCount - pictureCount);
 	const db = getDb();
@@ -315,7 +350,7 @@ All answers must be distinct across both arrays — no duplicates whatsoever.
 Bonus answers must not be about the same specific subject as any tossup answer. If a tossup is about a painting, the bonus must not be about that same painting, its painter, or its depicted subject. Keep tossup and bonus topics clearly separated.
 Output ONLY the JSON object, no other text, no markdown fences.`;
 
-		const tasks: Promise<unknown>[] = [];
+		const jobs: (() => Promise<unknown>)[] = [];
 		const plannedAnswers: string[] = [];
 
 		if (writtenTossupCount > 0 || bonusCount > 0) {
@@ -340,14 +375,14 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 			log.info(`[${setId}] Phase 1 complete: ${plan.tossup_answers?.length ?? 0} tossup answers, ${plan.bonus_answers?.length ?? 0} bonus answers`);
 
-			// Phase 2: Parallel Question Writing
-			log.info(`[${setId}] Phase 2: writing questions in parallel`);
+			// Phase 2: Parallel Question Writing, in batches
+			log.info(`[${setId}] Phase 2: writing questions in batches of ${TOSSUPS_PER_BATCH} tossups / ${BONUSES_PER_BATCH} bonuses`);
 
-			if (writtenTossupCount > 0) {
-				const answerList = plan.tossup_answers.slice(0, writtenTossupCount).join("\n- ");
-				const tossupPrompt = `Write ${writtenTossupCount} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — every sentence must refer to the subject as 'this person', 'this country', 'this work', 'this element', etc., and the first sentence must not reveal its namesake, word origin, or most famous fact. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
+			for (const batch of chunk((plan.tossup_answers ?? []).slice(0, writtenTossupCount), TOSSUPS_PER_BATCH)) {
+				const answerList = batch.join("\n- ");
+				const tossupPrompt = `Write ${batch.length} tossups for these specific answers:\n- ${answerList}\n\nEach tossup must be about its assigned answer. CRITICAL: the answer word and any variant or near-homophone of it must NEVER appear anywhere in the question text — every sentence must refer to the subject as 'this person', 'this country', 'this work', 'this element', etc., and the first sentence must not reveal its namesake, word origin, or most famous fact. Save all via mcp__3roads__save_tossups_batch with setId "${setId}".`;
 
-				tasks.push(
+				jobs.push(() =>
 					runLlmChat({
 						prompt: tossupPrompt,
 						systemPrompt: buildTossupSystemPrompt(setId, difficulty, theme),
@@ -357,11 +392,11 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 				);
 			}
 
-			if (bonusCount > 0) {
-				const answerList = plan.bonus_answers.slice(0, bonusCount).join("\n- ");
-				const bonusPrompt = `Write ${bonusCount} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
+			for (const batch of chunk((plan.bonus_answers ?? []).slice(0, bonusCount), BONUSES_PER_BATCH)) {
+				const answerList = batch.join("\n- ");
+				const bonusPrompt = `Write ${batch.length} bonuses. Each bonus's theme should relate to this answer:\n- ${answerList}\n\nEach bonus has 3 parts with different answers. The leadin must be a plain declarative statement telling players what the bonus is about (e.g. "This bonus is about Switzerland." or "Answer these questions about the water cycle.") — never a clue or teaser. Save all via mcp__3roads__save_bonuses_batch with setId "${setId}".`;
 
-				tasks.push(
+				jobs.push(() =>
 					runLlmChat({
 						prompt: bonusPrompt,
 						systemPrompt: buildBonusSystemPrompt(setId, difficulty, theme),
@@ -372,14 +407,14 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 			}
 		}
 
-		// Picture tossups run in parallel with regular generation
+		// Picture tossups go first in the queue: they retry internally and take the longest
 		if (pictureCount > 0) {
-			tasks.push(
+			jobs.unshift(() =>
 				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, excludeAnswers: plannedAnswers, onCost }),
 			);
 		}
 
-		const results = await Promise.allSettled(tasks);
+		const results = await settleLimited(jobs, MAX_PARALLEL_CALLS);
 		await removeDuplicateTossups(setId);
 
 		const errors: string[] = [];

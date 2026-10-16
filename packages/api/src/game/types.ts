@@ -61,6 +61,8 @@ export interface TossupReading {
 	buzzWordIndex: number | null;
 	incorrectBuzzers: Set<string>;
 	isPicture: boolean;
+	/** Prompts given on the current buzz */
+	promptCount: number;
 }
 
 export interface BonusReading {
@@ -75,6 +77,8 @@ export interface BonusReading {
 	inLeadin: boolean;
 	leadinRevealedCount: number;
 	partRevealedCount: number;
+	/** Prompts given on the current part */
+	promptCount: number;
 }
 
 export interface GameSettings {
@@ -206,6 +210,11 @@ export interface AnswerTypingMsg {
 	text: string;
 }
 
+export interface ChatMsg {
+	type: "chat";
+	text: string;
+}
+
 export type ClientMessage =
 	| CreateRoomMsg
 	| JoinRoomMsg
@@ -223,7 +232,8 @@ export type ClientMessage =
 	| CancelTtsMsg
 	| PauseMsg
 	| ResumeMsg
-	| AnswerTypingMsg;
+	| AnswerTypingMsg
+	| ChatMsg;
 
 // -- Server -> Client messages --
 
@@ -284,6 +294,22 @@ export interface AnswerResultEvt {
 	points: number;
 	buzzWordIndex: number;
 	words?: string[];
+}
+
+export interface AnswerPromptEvt {
+	type: "answer_prompt";
+	playerId: string;
+	playerName: string;
+	answer: string;
+	isBonus: boolean;
+}
+
+export interface ChatEvt {
+	type: "chat";
+	playerId: string;
+	playerName: string;
+	text: string;
+	sentAt: number;
 }
 
 export interface TossupDeadEvt {
@@ -429,6 +455,8 @@ export type ServerMessage =
 	| WordRevealEvt
 	| PlayerBuzzedEvt
 	| AnswerResultEvt
+	| AnswerPromptEvt
+	| ChatEvt
 	| TossupDeadEvt
 	| PictureBuzzWindowEvt
 	| BonusStartEvt

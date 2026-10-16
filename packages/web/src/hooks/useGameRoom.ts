@@ -78,6 +78,13 @@ export interface HistoryEntry {
 	maxBonusPoints?: number;
 }
 
+export interface ChatMessage {
+	playerId: string;
+	playerName: string;
+	text: string;
+	sentAt: number;
+}
+
 export interface GameState {
 	connected: boolean;
 	roomCode: string | null;
@@ -100,6 +107,9 @@ export interface GameState {
 	history: HistoryEntry[];
 	answerTyping: { playerName: string; text: string } | null;
 	pictureBuzzWindowEndMs: number | null;
+	/** Set when the judge asked the answering player to be more specific */
+	prompt: { playerId: string; playerName: string; answer: string; isBonus: boolean } | null;
+	chat: ChatMessage[];
 }
 
 type Action =
@@ -129,6 +139,8 @@ type Action =
 	| { type: "player_reconnected"; playerId: string; playerName: string }
 	| { type: "tts_progress"; current: number; total: number; etaMs?: number }
 	| { type: "answer_typing"; playerName: string; text: string }
+	| { type: "answer_prompt"; playerId: string; playerName: string; answer: string; isBonus: boolean }
+	| ({ type: "chat" } & ChatMessage)
 	| {
 		type: "game_sync";
 		tossup: {
@@ -183,6 +195,8 @@ const initialState: GameState = {
 	history: [],
 	answerTyping: null,
 	pictureBuzzWindowEndMs: null,
+	prompt: null,
+	chat: [],
 };
 
 function reducer(state: GameState, action: Action): GameState {
@@ -226,6 +240,7 @@ function reducer(state: GameState, action: Action): GameState {
 				},
 				lastResult: null,
 				deadAnswer: null,
+				prompt: null,
 				bonus: null,
 				neggedPlayerIds: new Set(),
 				error: null,
@@ -283,6 +298,7 @@ function reducer(state: GameState, action: Action): GameState {
 				},
 				buzzedPlayer: null,
 				answerTyping: null,
+				prompt: null,
 			};
 		}
 		case "tossup_dead":
@@ -344,6 +360,7 @@ function reducer(state: GameState, action: Action): GameState {
 			return {
 				...state,
 				answerTyping: null,
+				prompt: null,
 				bonus: {
 					...state.bonus,
 					currentPart: null,
@@ -391,6 +408,11 @@ function reducer(state: GameState, action: Action): GameState {
 		case "player_disconnected":
 		case "player_reconnected":
 			return state; // player_list update handles this
+		case "answer_prompt":
+			return { ...state, prompt: { playerId: action.playerId, playerName: action.playerName, answer: action.answer, isBonus: action.isBonus }, answerTyping: null };
+		case "chat":
+			// Keep the log bounded for long games
+			return { ...state, chat: [...state.chat, { playerId: action.playerId, playerName: action.playerName, text: action.text, sentAt: action.sentAt }].slice(-100) };
 		case "answer_typing":
 			return { ...state, answerTyping: { playerName: action.playerName, text: action.text } };
 		case "game_sync":
@@ -504,6 +526,7 @@ export function useGameRoom() {
 	const sendAudioReady = useCallback(() => send({ type: "audio_ready" }), [send]);
 	const cancelTts = useCallback(() => send({ type: "cancel_tts" }), [send]);
 	const sendTyping = useCallback((text: string) => send({ type: "answer_typing", text }), [send]);
+	const sendChat = useCallback((text: string) => send({ type: "chat", text }), [send]);
 	const clearError = useCallback(() => dispatch({ type: "clear_error" }), []);
 	const disconnect = useCallback(() => {
 		socketRef.current?.close();
@@ -529,6 +552,7 @@ export function useGameRoom() {
 		sendAudioReady,
 		cancelTts,
 		sendTyping,
+		sendChat,
 		clearError,
 		disconnect,
 	};

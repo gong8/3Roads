@@ -3,7 +3,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { streamLlmChat } from "../services/llm-chat.js";
-import { runGeneration } from "../services/generate-orchestrator.js";
+import { MAX_SET_QUESTIONS, runGeneration } from "../services/generate-orchestrator.js";
 import { startStream, subscribe } from "../services/stream-manager.js";
 
 const log = createLogger("api:generate");
@@ -229,8 +229,8 @@ generateRoutes.post("/", async (c) => {
 			setId: set.id,
 			theme: body.theme,
 			difficulty,
-			tossupCount: body.tossupCount || 0,
-			bonusCount: body.bonusCount || 0,
+			tossupCount: Math.min(body.tossupCount || 0, MAX_SET_QUESTIONS),
+			bonusCount: Math.min(body.bonusCount || 0, MAX_SET_QUESTIONS),
 			pictureCount: body.pictureCount || 0,
 			model: body.model,
 		}).catch((err) => {
@@ -240,8 +240,8 @@ generateRoutes.post("/", async (c) => {
 		return c.json({
 			setId: set.id,
 			status: "generating",
-			tossupCount: body.tossupCount || 0,
-			bonusCount: body.bonusCount || 0,
+			tossupCount: Math.min(body.tossupCount || 0, MAX_SET_QUESTIONS),
+			bonusCount: Math.min(body.bonusCount || 0, MAX_SET_QUESTIONS),
 		});
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);

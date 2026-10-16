@@ -14,10 +14,13 @@ const DIFFICULTIES = [
   "Open",
 ];
 
+/** Matches MAX_SET_QUESTIONS on the server, which writes large sets in batches. */
+const MAX_TOSSUPS = 50;
+
 export function Generate() {
   const [theme, setTheme] = useState("");
   const [tossupCountStr, setTossupCountStr] = useState("5");
-  const tossupCount = Math.min(20, Math.max(1, parseInt(tossupCountStr, 10) || 1));
+  const tossupCount = Math.min(MAX_TOSSUPS, Math.max(1, parseInt(tossupCountStr, 10) || 1));
   const [pictureCountStr, setPictureCountStr] = useState("0");
   const pictureCount = Math.min(tossupCount, Math.max(0, parseInt(pictureCountStr, 10) || 0));
   const [includeBonuses, setIncludeBonuses] = useState(true);
@@ -105,7 +108,7 @@ export function Generate() {
             onChange={(e) => setTossupCountStr(e.target.value)}
             onBlur={() => setTossupCountStr(String(tossupCount))}
             min={1}
-            max={20}
+            max={MAX_TOSSUPS}
             className="border border-black px-2 py-1 w-20 font-mono"
             disabled={isGenerating}
           />

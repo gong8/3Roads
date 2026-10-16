@@ -106,6 +106,9 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 		case "answer_typing":
 			handleAnswerTyping(ws, msg.text);
 			break;
+		case "chat":
+			handleChat(ws, msg.text);
+			break;
 		case "next_question":
 			handleNextQuestion(ws);
 			break;
@@ -261,6 +264,18 @@ function handleAnswerTyping(ws: WebSocket, text: string): void {
 	const player = ctx.room.players.get(ctx.playerId);
 	if (!player) return;
 	broadcast(ctx.room, { type: "answer_typing", playerName: player.name, text });
+}
+
+const MAX_CHAT_LENGTH = 300;
+
+function handleChat(ws: WebSocket, text: string): void {
+	const ctx = getContext(ws);
+	if (!ctx) return;
+	const player = ctx.room.players.get(ctx.playerId);
+	if (!player || typeof text !== "string") return;
+	const trimmed = text.trim().slice(0, MAX_CHAT_LENGTH);
+	if (!trimmed) return;
+	broadcast(ctx.room, { type: "chat", playerId: player.id, playerName: player.name, text: trimmed, sentAt: Date.now() });
 }
 
 async function handleSubmitAnswer(ws: WebSocket, answer: string): Promise<void> {

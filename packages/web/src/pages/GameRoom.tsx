@@ -6,6 +6,7 @@ import { useGameRoom } from "../hooks/useGameRoom";
 import { AnswerInput } from "../components/game/AnswerInput";
 import { BonusReader } from "../components/game/BonusReader";
 import { BuzzButton } from "../components/game/BuzzButton";
+import { ChatPanel } from "../components/game/ChatPanel";
 import { ModeratorPanel } from "../components/game/ModeratorPanel";
 import { QuestionHistory } from "../components/game/QuestionHistory";
 import { Scoreboard } from "../components/game/Scoreboard";
@@ -59,6 +60,7 @@ export function GameRoom() {
 		sendAudioReady,
 		cancelTts,
 		sendTyping,
+		sendChat,
 		disconnect,
 	} = useGameRoom();
 
@@ -143,10 +145,18 @@ export function GameRoom() {
 		return controlling.team != null && controlling.team === myPlayer.team;
 	})();
 
+	const [chatOpen, setChatOpen] = useState(false);
+	const closeChat = useCallback(() => setChatOpen(false), []);
+
 	// Keyboard shortcuts
 	const handleKeyDown = useCallback(
 		(e: KeyboardEvent) => {
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+			if (e.key === "Enter") {
+				e.preventDefault();
+				setChatOpen(true);
+				return;
+			}
 			if (e.code === "Space" && state.phase !== "lobby") {
 				e.preventDefault();
 				if (state.phase === "reading_tossup" || canBuzzBonus) buzz();
@@ -311,7 +321,7 @@ export function GameRoom() {
 
 					{state.phase === "awaiting_answer" && isMyBuzz && state.awaitAnswer && (
 						<div className="mt-2">
-							<AnswerInput onSubmit={submitAnswer} onTyping={sendTyping} timeMs={state.awaitAnswer.timeMs} />
+							<AnswerInput onSubmit={submitAnswer} onTyping={sendTyping} timeMs={state.awaitAnswer.timeMs} label={state.prompt && !state.prompt.isBonus ? `prompt on "${state.prompt.answer}" — more specific?` : undefined} />
 						</div>
 					)}
 
@@ -320,6 +330,10 @@ export function GameRoom() {
 							waiting for {state.awaitAnswer.playerName} to answer...
 							{state.answerTyping && <span className="ml-2 font-mono">"{state.answerTyping.text}"</span>}
 						</div>
+					)}
+
+					{state.prompt && !state.prompt.isBonus && state.phase === "awaiting_answer" && !isMyBuzz && (
+						<div className="mt-2 text-xs text-amber-700">prompt: {state.prompt.playerName} said "{state.prompt.answer}"</div>
 					)}
 
 					{state.phase === "judging" && !state.bonus && (
@@ -356,11 +370,12 @@ export function GameRoom() {
 					)}
 
 					{state.phase === "bonus_answering" && canAnswerBonus && state.awaitBonusAnswer && (
-						<AnswerInput onSubmit={submitBonusAnswer} onTyping={sendTyping} timeMs={state.awaitBonusAnswer.timeMs} label="bonus answer" />
+						<AnswerInput onSubmit={submitBonusAnswer} onTyping={sendTyping} timeMs={state.awaitBonusAnswer.timeMs} label={state.prompt?.isBonus ? `prompt on "${state.prompt.answer}" — more specific?` : "bonus answer"} />
 					)}
 
 					{state.phase === "bonus_answering" && !canAnswerBonus && (
 						<div className="text-xs text-gray-500 mt-2">
+							{state.prompt?.isBonus && <span className="text-amber-700 mr-2">prompt on "{state.prompt.answer}" —</span>}
 							waiting for answer...
 							{state.answerTyping && <span className="ml-2 font-mono">"{state.answerTyping.text}"</span>}
 						</div>
@@ -453,6 +468,8 @@ export function GameRoom() {
 			)}
 
 			{state.error && <div className="mt-3 text-red-700 text-xs">{state.error}</div>}
+
+			<ChatPanel messages={state.chat} currentPlayerId={state.playerId} open={chatOpen} onSend={sendChat} onClose={closeChat} />
 
 			{/* Question History */}
 			{state.phase !== "lobby" && (
