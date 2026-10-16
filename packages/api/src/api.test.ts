@@ -289,3 +289,26 @@ test("game history: ending a game twice records each player once", async () => {
 	assert.equal(await db.gameResult.count({ where: { userId: "u_frank", setName: "history-pack" } }), 1);
 	activeRooms.delete(room.code);
 });
+
+test("openrouter: only listed models may run on the server's key", async (t) => {
+	process.env.OPENROUTER_API_KEY = "or-test";
+	t.after(() => {
+		delete process.env.OPENROUTER_API_KEY;
+		globalThis.fetch = realFetch;
+	});
+	const { canUseModel, OPENROUTER_MODELS } = await import("./services/llm-chat.js");
+	let calls = 0;
+	globalThis.fetch = (async () => {
+		calls++;
+		return new Response("", { status: 500 });
+	}) as typeof fetch;
+
+	assert.equal(await canUseModel("u_alice", OPENROUTER_MODELS[0].slug), true);
+	assert.equal(await canUseModel("u_alice", "openai/some-very-expensive-model"), false);
+	const db = getDb();
+	const set = await db.questionSet.create({ data: { name: "or", theme: "t", ownerId: "u_alice" } });
+	const res = await runLlmChat({ userId: "u_alice", setId: set.id, prompt: "p", systemPrompt: "s", model: "openai/some-very-expensive-model" });
+	assert.equal(res.ok, false);
+	assert.match(res.error ?? "", /not available/);
+	assert.equal(calls, 0, "no request reaches OpenRouter");
+});
