@@ -17,7 +17,18 @@ export const AUTHORIZED_PARTIES = (process.env.CLERK_AUTHORIZED_PARTIES ?? "")
 	.split(",")
 	.map((s) => s.trim())
 	.filter(Boolean);
-if (!JWT_KEY) log.error("CLERK_JWT_KEY is not set: every request will be treated as signed out");
+
+// Local testing: LOCAL_AUTH=1 signs every request and socket in as one local user, so the
+// app runs without a Clerk instance. Never in a deployment: refuse to start if it is
+// combined with production settings.
+const LOCAL_AUTH = process.env.LOCAL_AUTH === "1";
+if (LOCAL_AUTH && (process.env.SERVE_STATIC || process.env.NODE_ENV === "production")) {
+	throw new Error("LOCAL_AUTH=1 is for local development only; unset it (SERVE_STATIC or NODE_ENV=production is set)");
+}
+const LOCAL_USER: SessionUser = { id: "local-dev", email: "local@localhost" };
+
+if (LOCAL_AUTH) log.warn("LOCAL_AUTH=1: sign-in is disabled, everyone is the local dev user");
+else if (!JWT_KEY) log.error("CLERK_JWT_KEY is not set: every request will be treated as signed out");
 
 /**
  * True when the page that opened the socket is ours: same host name as the server
@@ -51,6 +62,7 @@ function sessionCookie(cookieHeader: string | undefined): string | undefined {
 
 /** The signed-in user for these request headers, or null. Fails closed. */
 export async function userFromHeaders(authorization: string | undefined, cookie: string | undefined): Promise<SessionUser | null> {
+	if (LOCAL_AUTH) return rememberUser(LOCAL_USER);
 	const bearer = authorization?.startsWith("Bearer ") ? authorization.slice(7) : undefined;
 	const token = bearer || sessionCookie(cookie);
 	if (!token || !JWT_KEY) return null;
@@ -65,7 +77,11 @@ export async function userFromHeaders(authorization: string | undefined, cookie:
 	}
 	if (!payload.sub) return null;
 	// The email claim comes from the session token template (see README).
-	const user = { id: payload.sub, email: typeof payload.email === "string" ? payload.email : undefined };
+	return rememberUser({ id: payload.sub, email: typeof payload.email === "string" ? payload.email : undefined });
+}
+
+/** Make sure the user has a row (sets, ChatGPT connection and results hang off it). */
+async function rememberUser(user: SessionUser): Promise<SessionUser> {
 	if (!knownUsers.has(user.id)) {
 		await getDb().user.upsert({
 			where: { id: user.id },

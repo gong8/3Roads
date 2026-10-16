@@ -1,5 +1,12 @@
+
 import { createLogger } from "@3roads/shared";
-import { DEFAULT_MODEL, runLlmChatSimple } from "../services/llm-chat.js";
+import {
+	DEFAULT_MODEL,
+	DEFAULT_OPENROUTER_MODEL,
+	defaultModelFor,
+	isOpenRouterModel,
+	runLlmChatSimple,
+} from "../services/llm-chat.js";
 
 const log = createLogger("api:game:judge");
 
@@ -191,7 +198,8 @@ export async function judgeAnswer(
 	strictness: number,
 	/**
 	 * The answering player's user ID. Their own ChatGPT plan pays for LLM judging, never
-	 * another player's; without a connected plan, ambiguous answers are judged incorrect.
+	 * another player's; without one, OpenRouter judges (when the server has a key), and
+	 * failing that ambiguous answers are judged incorrect.
 	 */
 	userId?: string,
 ): Promise<{ verdict: Verdict }> {
@@ -208,10 +216,12 @@ export async function judgeAnswer(
 	}
 
 	// Slow path: fall back to LLM for ambiguous cases
-	if (!userId) {
-		log.info(`judge [local] — submitted="${submittedAnswer}" unsure and the player is not identified, verdict=incorrect`);
+	const model = await defaultModelFor(userId, CHATGPT_JUDGE_MODEL);
+	if (!model) {
+		log.info(`judge [local] — submitted="${submittedAnswer}" unsure, no ChatGPT plan or OpenRouter key to judge with, verdict=incorrect`);
 		return { verdict: "incorrect" };
 	}
+	const judgeModel = isOpenRouterModel(model) ? OPENROUTER_JUDGE_MODEL : model;
 	// Bracketed notes are stripped from the canonical answer and their directives passed as separate lines instead
 
 	const canonicalForLlm = canonicalAnswer.replace(/\s*\[[^\]]*\]/g, "").trim();
@@ -234,7 +244,13 @@ export async function judgeAnswer(
 	].join("\n");
 
 	try {
-		const result = await fetchJudge(userId, systemPrompt, userPrompt);
+		const result = await runLlmChatSimple({
+			userId,
+			model: judgeModel,
+			systemPrompt,
+			prompt: userPrompt,
+			signal: AbortSignal.timeout(15_000),
+		});
 		// Word-boundary checks: "**Incorrect**" or "The answer is incorrect." must not read as correct
 		const text = result.toLowerCase();
 		const verdict: Verdict = /\bprompt\b/.test(text)
@@ -242,7 +258,7 @@ export async function judgeAnswer(
 			: /\bcorrect\b/.test(text) && !/\b(incorrect|not correct)\b/.test(text)
 				? "correct"
 				: "incorrect";
-		log.info(`judge [llm] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${verdict}`);
+		log.info(`judge [llm ${judgeModel}] — submitted="${submittedAnswer}" canonical="${canonicalAnswer}" verdict=${verdict}`);
 		return { verdict };
 	} catch (err) {
 		log.error(`judge [llm] — error: ${err instanceof Error ? err.message : err}, treating as incorrect`);
@@ -252,14 +268,5 @@ export async function judgeAnswer(
 
 // -- LLM backend --
 
-const JUDGE_MODEL = process.env.OPENAI_JUDGE_MODEL || DEFAULT_MODEL;
-
-function fetchJudge(userId: string, systemPrompt: string, userPrompt: string): Promise<string> {
-	return runLlmChatSimple({
-		userId,
-		model: JUDGE_MODEL,
-		systemPrompt,
-		prompt: userPrompt,
-		signal: AbortSignal.timeout(15_000),
-	});
-}
+const CHATGPT_JUDGE_MODEL = process.env.OPENAI_JUDGE_MODEL || DEFAULT_MODEL;
+const OPENROUTER_JUDGE_MODEL = process.env.OPENROUTER_JUDGE_MODEL || DEFAULT_OPENROUTER_MODEL;

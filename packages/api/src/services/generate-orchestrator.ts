@@ -6,8 +6,8 @@ const log = createLogger("api:orchestrator");
 /** Most tossups (and bonuses) a single set can ask for. */
 export const MAX_SET_QUESTIONS = 50;
 /** Questions written per LLM call — keeps each reply well inside output limits and quality steady. */
-const TOSSUPS_PER_BATCH = 10;
-const BONUSES_PER_BATCH = 5;
+const TOSSUPS_PER_BATCH = 25;
+const BONUSES_PER_BATCH = 25;
 /** LLM calls in flight at once while writing a set. */
 const MAX_PARALLEL_CALLS = 6;
 
@@ -42,7 +42,7 @@ const SYSTEM_PROMPT_SUFFIX = [
 	"- Always include category, subcategory, and difficulty for each question.",
 	"- NEVER include the answer word, any variant of it, or anything that sounds like it ANYWHERE in the question text. Replace it with a placeholder like 'this country', 'this author', 'this element', 'this work', 'this region', etc. as appropriate. The answer must not be nameable from any word in the question itself.",
 	"- NEVER write clues that transparently give away the answer through etymology, word games, or trivial restatement.",
-	"- Every tossup must be strictly pyramidal: hardest clues first, power mark at 1/3-1/2 through, giveaway last.",
+	"- Every tossup must be strictly pyramidal: hardest clues first, (*) placed immediately before the first word that gives the answer away (1/3-1/2 through), giveaway last.",
 	"- In every answer field, wrap the part a player MUST say in {curly braces}; everything outside the braces is optional. Brace only the distinctive name; generic descriptor words like River, Lake, Mount, Strait of, Battle of, line, a first name, or a territorial qualifier like \"of England\" stay OUTSIDE the braces. Examples: \"{Ganges} River\", \"Lake {Baikal}\", \"Strait of {Gibraltar}\", \"{Bakerloo} line\", \"Johann Sebastian {Bach}\", \"{Ely}, Cambridgeshire\", \"Battle of {Hastings}\", \"{James I} of England\". Brace the whole answer only when every word is essential: \"{France}\", \"{mitochondria}\", \"{The Great Gatsby}\". Alternatives go in square brackets and get braces too: \"{DNA} [accept {deoxyribonucleic acid}]\".",
 ].join("\n");
 
@@ -87,7 +87,7 @@ Calibrate clue difficulty and answer selection to the "${difficulty}" level:
 Each tossup MUST follow strict pyramidal structure:
 - **First 1-3 sentences:** Obscure, specific facts that only deep experts would know.
 - **Middle sentences:** Moderately difficult facts that knowledgeable players would recognize.
-- **Power mark placement:** Insert the literal text "(*)" (with parentheses) after the transition from hard to moderate clues, roughly 1/3 to 1/2 through the question.
+- **Power mark placement:** Insert the literal text "(*)" (with parentheses) immediately BEFORE the first word that gives the answer away to a knowledgeable player: the key word of a famous work, name, event, or nickname. Everything before (*) must be obscure enough to earn power, so that word always comes right AFTER (*), never before it. This usually means (*) sits mid-sentence. It typically lands 1/3 to 1/2 through the question. WRONG: "...sketched a man inscribed in a circle and square in the Vitruvian study. (*)" RIGHT: "...sketched a man inscribed in a circle and square in the (*) Vitruvian study."
 - **Final sentence (giveaway):** A well-known identifying fact, preceded by "For 10 points," or "FTP,"
 - **Answer:** Put the answer ONLY in the separate "answer" field. The question text must end with the giveaway sentence — never append "ANSWER: ..." to it.
 
@@ -187,8 +187,10 @@ async function generatePictureTossups(params: {
 	/** Answers already used elsewhere in the set; picture topics must not repeat them */
 	excludeAnswers: string[];
 	userId: string;
+	model?: string;
+	onCost?: (usd: number) => void;
 }): Promise<void> {
-	const { setId, count, theme, difficulty, excludeAnswers, userId } = params;
+	const { setId, count, theme, difficulty, excludeAnswers, userId, model, onCost } = params;
 	const db = getDb();
 
 	const MAX_ATTEMPTS = 3;
@@ -239,7 +241,9 @@ Output ONLY a JSON array, no markdown. Example:
 			const raw = await runLlmChatSimple({
 				prompt,
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
+				model,
 				userId,
+				onCost,
 			});
 			const cleaned = raw.replace(/```[a-z]*\n?/gi, "").trim();
 			const parsed = JSON.parse(cleaned) as PictureTopic[];
@@ -328,6 +332,12 @@ export async function runGeneration(params: {
 	// Picture questions are drawn from the tossup budget; written tossups fill the remainder
 	const writtenTossupCount = Math.max(0, tossupCount - pictureCount);
 	const db = getDb();
+	// Total OpenRouter spend across every LLM call for this set. Stays null for ChatGPT plan
+	// runs, which have no per-call price, so the set shows no cost rather than $0.
+	let cost: number | null = null;
+	const onCost = (usd: number) => {
+		cost = (cost ?? 0) + usd;
+	};
 
 	try {
 		await db.questionSet.update({
@@ -356,6 +366,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 				systemPrompt: "You are a quiz bowl expert. Output only valid JSON.",
 				model,
 				userId,
+				onCost,
 			});
 
 			const jsonMatch = planResult.match(/\{[\s\S]*\}/);
@@ -387,6 +398,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						model,
 						userId,
 						setId,
+						onCost,
 					}),
 				);
 			}
@@ -402,6 +414,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 						model,
 						userId,
 						setId,
+						onCost,
 					}),
 				);
 			}
@@ -410,7 +423,7 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 		// Picture tossups go first in the queue: they retry internally and take the longest
 		if (pictureCount > 0) {
 			jobs.unshift(() =>
-				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, excludeAnswers: plannedAnswers, userId }),
+				generatePictureTossups({ setId, count: pictureCount, theme, difficulty, excludeAnswers: plannedAnswers, userId, model, onCost }),
 			);
 		}
 
@@ -428,15 +441,15 @@ Output ONLY the JSON object, no other text, no markdown fences.`;
 
 		if (errors.length > 0) {
 			log.error(`[${setId}] Phase 2 errors: ${errors.join("; ")}`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
+			await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
 		} else {
-			log.info(`[${setId}] Generation complete`);
-			await db.questionSet.update({ where: { id: setId }, data: { status: "complete" } });
+			log.info(`[${setId}] Generation complete${cost != null ? ` — cost=$${(cost as number).toFixed(4)}` : ""}`);
+			await db.questionSet.update({ where: { id: setId }, data: { status: "complete", cost } });
 		}
 	} catch (err) {
 		const msg = err instanceof Error ? err.message : String(err);
 		log.error(`[${setId}] Generation failed: ${msg}`);
-		await db.questionSet.update({ where: { id: setId }, data: { status: "error" } });
+		await db.questionSet.update({ where: { id: setId }, data: { status: "error", cost } });
 	}
 
 	// Clean up sets that ended up with no questions at all

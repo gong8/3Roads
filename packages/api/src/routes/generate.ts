@@ -2,11 +2,17 @@ import { createLogger, getDb } from "@3roads/shared";
 import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { streamLlmChat } from "../services/llm-chat.js";
+import { canUseModel, isOpenRouterModel, streamLlmChat } from "../services/llm-chat.js";
 import { MAX_SET_QUESTIONS, runGeneration } from "../services/generate-orchestrator.js";
 import { startStream, subscribe } from "../services/stream-manager.js";
-import { getAccessToken } from "../services/chatgpt-auth.js";
 import { currentUser } from "../services/user-auth.js";
+
+/** Why a model can't run: ChatGPT models need the user's plan, OpenRouter models the server key. */
+function modelUnavailableMessage(model?: string): string {
+	return isOpenRouterModel(model)
+		? "OpenRouter models aren't available on this server (no OPENROUTER_API_KEY)"
+		: "Connect ChatGPT in settings to generate with this model, or pick an OpenRouter model";
+}
 
 const log = createLogger("api:generate");
 
@@ -44,10 +50,6 @@ generateRoutes.post("/stream", async (c) => {
 	log.info("POST /generate/stream — request received");
 
 	const user = currentUser(c);
-	if (!(await getAccessToken(user.id).catch(() => null))) {
-		return c.json({ error: "Connect ChatGPT in settings to generate questions" }, 403);
-	}
-
 	try {
 		const body = await c.req.json<{
 			theme: string;
@@ -58,6 +60,10 @@ generateRoutes.post("/stream", async (c) => {
 		}>();
 
 		log.info(`POST /generate/stream — params: theme="${body.theme}" tossupCount=${body.tossupCount} bonusCount=${body.bonusCount} difficulty="${body.difficulty}"`);
+
+		if (!(await canUseModel(user.id, body.model))) {
+			return c.json({ error: modelUnavailableMessage(body.model) }, 403);
+		}
 
 		if (!body.theme || (body.tossupCount === undefined && body.bonusCount === undefined)) {
 			log.warn("POST /generate/stream — missing required fields");
@@ -112,7 +118,7 @@ Calibrate clue difficulty and answer selection to the "${difficulty}" level:
 Each tossup MUST follow strict pyramidal structure:
 - **First 1-3 sentences:** Obscure, specific facts that only deep experts would know. These are the "power-worthy" clues.
 - **Middle sentences:** Moderately difficult facts that knowledgeable players would recognize.
-- **Power mark (*) placement:** Insert after the transition from hard to moderate clues, roughly 1/3 to 1/2 through the question.
+- **Power mark placement:** Insert the literal text "(*)" (with parentheses) immediately BEFORE the first word that gives the answer away to a knowledgeable player: the key word of a famous work, name, event, or nickname. Everything before (*) must be obscure enough to earn power, so that word always comes right AFTER (*), never before it. This usually means (*) sits mid-sentence. It typically lands 1/3 to 1/2 through the question. WRONG: "...sketched a man inscribed in a circle and square in the Vitruvian study. (*)" RIGHT: "...sketched a man inscribed in a circle and square in the (*) Vitruvian study."
 - **Final sentence (giveaway):** A well-known identifying fact, preceded by "For 10 points," or "FTP," — this should be answerable by most players at the target difficulty level, but should NOT be so obvious that it insults the player.
 - **End with:** "ANSWER: [answer]" (include acceptable alternate answers in brackets if applicable)
 
@@ -206,10 +212,6 @@ generateRoutes.post("/", async (c) => {
 	log.info("POST /generate — request received");
 
 	const user = currentUser(c);
-	if (!(await getAccessToken(user.id).catch(() => null))) {
-		return c.json({ error: "Connect ChatGPT in settings to generate questions" }, 403);
-	}
-
 	try {
 		const body = await c.req.json<{
 			theme: string;
@@ -219,6 +221,10 @@ generateRoutes.post("/", async (c) => {
 			difficulty: string;
 			model?: string;
 		}>();
+
+		if (!(await canUseModel(user.id, body.model))) {
+			return c.json({ error: modelUnavailableMessage(body.model) }, 403);
+		}
 
 		if (!body.theme || (body.tossupCount === undefined && body.bonusCount === undefined)) {
 			return c.json({ error: "theme and at least one of tossupCount/bonusCount are required" }, 400);

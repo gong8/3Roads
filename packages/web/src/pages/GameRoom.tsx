@@ -1,4 +1,3 @@
-import { AnswerText } from "../components/AnswerText";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useGameAudio } from "../hooks/useGameAudio";
@@ -292,8 +291,8 @@ export function GameRoom() {
 				</div>
 			)}
 
-			{/* Reading Tossup / Awaiting Answer / Judging */}
-			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || (state.phase === "paused" && !state.bonus) || (state.phase === "judging" && !state.bonus) || (state.phase === "between_questions" && !state.bonus)) && state.tossup && (
+			{/* Reading Tossup / Awaiting Answer / Judging — and once answered, the finished tossup stays in place above its bonus */}
+			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || state.phase === "paused" || state.phase === "judging" || state.phase === "between_questions" || state.bonus != null) && state.phase !== "game_over" && state.tossup && (
 				<div>
 					<TossupReader
 						words={state.tossup.words}
@@ -303,6 +302,8 @@ export function GameRoom() {
 						questionNumber={state.tossup.questionNumber}
 						totalQuestions={state.tossup.totalQuestions}
 						imageUrl={state.tossup.imageUrl}
+						buzzes={state.tossup.currentBuzzes}
+						finished={state.tossup.finished}
 					/>
 
 					{state.phase === "reading_tossup" && (
@@ -389,13 +390,6 @@ export function GameRoom() {
 				</div>
 			)}
 
-			{/* Dead tossup message */}
-			{state.deadAnswer && !["reading_tossup", "reading_bonus", "bonus_answering"].includes(state.phase) && (
-				<div className="text-xs text-gray-500 mb-2">
-					dead tossup — answer: <span className="font-bold text-black"><AnswerText answer={state.deadAnswer} /></span>
-				</div>
-			)}
-
 			{/* Between questions */}
 			{state.phase === "between_questions" && (() => {
 				const isLastQuestion = state.tossup != null && state.tossup.questionNumber === state.tossup.totalQuestions;
@@ -473,7 +467,10 @@ export function GameRoom() {
 
 			{/* Question History */}
 			{state.phase !== "lobby" && (
-				<QuestionHistory history={state.history} />
+				// The current question is shown in place until the next one starts, so leave it out of the list
+				<QuestionHistory
+					history={state.phase === "game_over" ? state.history : state.history.filter((h) => h.questionNumber !== state.tossup?.questionNumber)}
+				/>
 			)}
 			</div>
 		</>

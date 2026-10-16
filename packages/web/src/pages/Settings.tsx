@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
+import { formatCost } from "../lib/format";
 
 export interface ChatGPTStatus {
   connected: boolean;
@@ -21,9 +22,23 @@ export function useChatGPTStatus() {
   return useQuery({ queryKey: ["chatgpt"], queryFn: () => apiGet<ChatGPTStatus>("/me/chatgpt") });
 }
 
+/** The server's OpenRouter balance in USD; `enabled: false` when the server has no OpenRouter key. */
+export interface OpenRouterCredits {
+  enabled: boolean;
+  total?: number;
+  used?: number;
+  remaining?: number;
+  error?: string;
+}
+
+export function useOpenRouterCredits() {
+  return useQuery({ queryKey: ["openrouter-credits"], queryFn: () => apiGet<OpenRouterCredits>("/me/openrouter") });
+}
+
 export function Settings() {
   const qc = useQueryClient();
   const { data: chatgpt } = useChatGPTStatus();
+  const { data: credits } = useOpenRouterCredits();
   const { data: games } = useQuery({ queryKey: ["games"], queryFn: () => apiGet<GameResult[]>("/me/games") });
   const [pasting, setPasting] = useState(false);
   const [pasted, setPasted] = useState("");
@@ -94,6 +109,21 @@ export function Settings() {
           </div>
           {error && <p className="text-red-600 mt-2">{error}</p>}
         </form>
+      )}
+
+      {credits?.enabled && (
+        <>
+          <h2 className="font-bold mb-2">openrouter</h2>
+          <p className="mb-3 text-gray-600">openrouter models (muse spark) run on the server's account, no chatgpt needed.</p>
+          {credits.error ? (
+            <p className="mb-6 text-red-600">{credits.error}</p>
+          ) : (
+            <p className="mb-6">
+              <span className="font-bold">{formatCost(credits.remaining ?? 0)}</span> left
+              <span className="text-gray-500"> — {formatCost(credits.used ?? 0)} used of {formatCost(credits.total ?? 0)}</span>
+            </p>
+          )}
+        </>
       )}
 
       <h2 className="font-bold mb-2">recent games</h2>

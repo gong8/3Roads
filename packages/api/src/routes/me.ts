@@ -1,7 +1,14 @@
 import { createLogger, getDb } from "@3roads/shared";
 import { Hono } from "hono";
 import { AuthError, beginLogin, completeLogin, connectionStatus, disconnect, getAccessToken } from "../services/chatgpt-auth.js";
-import { DEFAULT_MODEL, listModels } from "../services/llm-chat.js";
+import {
+	DEFAULT_MODEL,
+	DEFAULT_OPENROUTER_MODEL,
+	listModels,
+	OPENROUTER_MODELS,
+	openRouterCredits,
+	openRouterEnabled,
+} from "../services/llm-chat.js";
 import { currentUser } from "../services/user-auth.js";
 
 const log = createLogger("api:me");
@@ -30,14 +37,39 @@ meRoutes.delete("/chatgpt", async (c) => {
 	return c.json({ ok: true });
 });
 
+/**
+ * Models this user can pick for generation. `models` are their ChatGPT plan's (empty until
+ * connected; `chatgptDefault` is still offered so they can choose it and be asked to connect),
+ * `openrouter` are the server-paid ones. `default` prefers ChatGPT when connected.
+ */
 meRoutes.get("/models", async (c) => {
+	const openrouter = openRouterEnabled() ? OPENROUTER_MODELS : [];
 	const token = await getAccessToken(currentUser(c).id).catch(() => null);
-	if (!token) return c.json({ default: DEFAULT_MODEL, models: [] });
+	let models: { slug: string; name: string }[] = [];
+	if (token) {
+		try {
+			models = await listModels(token);
+		} catch (err) {
+			log.warn(`GET /me/models — ${err instanceof Error ? err.message : err}`);
+		}
+	}
+	return c.json({
+		default: token || openrouter.length === 0 ? DEFAULT_MODEL : DEFAULT_OPENROUTER_MODEL,
+		chatgptConnected: !!token,
+		chatgptDefault: DEFAULT_MODEL,
+		models,
+		openrouter,
+	});
+});
+
+/** The server's OpenRouter balance, which pays for OpenRouter models. `enabled: false` when there's no key. */
+meRoutes.get("/openrouter", async (c) => {
+	if (!openRouterEnabled()) return c.json({ enabled: false });
 	try {
-		return c.json({ default: DEFAULT_MODEL, models: await listModels(token) });
+		return c.json({ enabled: true, ...(await openRouterCredits()) });
 	} catch (err) {
-		log.warn(`GET /me/models — ${err instanceof Error ? err.message : err}`);
-		return c.json({ default: DEFAULT_MODEL, models: [] });
+		log.warn(`GET /me/openrouter — ${err instanceof Error ? err.message : err}`);
+		return c.json({ enabled: true, error: "Couldn't reach OpenRouter" });
 	}
 });
 

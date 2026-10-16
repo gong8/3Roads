@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { useChatGPTStatus } from "./Settings";
+import { useChatGPTStatus, useOpenRouterCredits } from "./Settings";
 import { useGenerate } from "../hooks/useGenerate";
 import { apiGet } from "../lib/api";
 import { formatCost } from "../lib/format";
@@ -20,6 +20,21 @@ const DIFFICULTIES = [
 /** Matches MAX_SET_QUESTIONS on the server, which writes large sets in batches. */
 const MAX_TOSSUPS = 50;
 
+interface ModelList {
+  default: string;
+  chatgptConnected: boolean;
+  chatgptDefault: string;
+  /** The user's ChatGPT plan models; empty until connected */
+  models: { slug: string; name: string }[];
+  /** Server-paid OpenRouter models; empty when the server has no key */
+  openrouter: { slug: string; name: string }[];
+}
+
+/** OpenRouter slugs are "vendor/model"; ChatGPT plan slugs never contain a slash. */
+function isOpenRouterModel(model: string): boolean {
+  return model.includes("/");
+}
+
 export function Generate() {
   const [theme, setTheme] = useState("");
   const [tossupCountStr, setTossupCountStr] = useState("5");
@@ -31,12 +46,15 @@ export function Generate() {
   const { data: chatgpt } = useChatGPTStatus();
   const connected = chatgpt?.connected === true;
   const { data: modelList } = useQuery({
-    queryKey: ["chatgpt-models"],
-    queryFn: () => apiGet<{ default: string; models: { slug: string; name: string }[] }>("/me/models"),
-    enabled: connected,
+    // Keyed on the connection so connecting in settings refreshes the list
+    queryKey: ["chatgpt-models", connected],
+    queryFn: () => apiGet<ModelList>("/me/models"),
   });
   const [chosenModel, setModel] = useState<string | null>(null);
   const model = chosenModel ?? modelList?.default ?? "";
+  // OpenRouter models run on the server's key; ChatGPT models need the user's own plan
+  const needsChatGPT = model !== "" && !isOpenRouterModel(model) && !connected;
+  const { data: credits, refetch: refetchCredits } = useOpenRouterCredits();
   const {
     isGenerating, error, setId, status,
     tossupCount: savedTossups, bonusCount: savedBonuses,
@@ -53,6 +71,11 @@ export function Generate() {
   const totalTarget = targetTossups + targetBonuses;
   const totalSaved = savedTossups + savedBonuses;
   const isDone = status === "complete";
+
+  // A finished run has spent credits: show the new balance
+  useEffect(() => {
+    if (isDone) refetchCredits();
+  }, [isDone, refetchCredits]);
 
   let progress = 0;
   if (totalTarget > 0) {
@@ -105,13 +128,36 @@ export function Generate() {
             className="border border-black px-2 py-1 font-mono"
             disabled={isGenerating}
           >
-            {modelList && !modelList.models.some((m) => m.slug === modelList.default) && (
-              <option value={modelList.default}>{modelList.default}</option>
+            {modelList && modelList.openrouter.length > 0 && (
+              <optgroup label="openrouter">
+                {modelList.openrouter.map((m) => (
+                  <option key={m.slug} value={m.slug}>{m.name}</option>
+                ))}
+              </optgroup>
             )}
-            {modelList?.models.map((m) => (
-              <option key={m.slug} value={m.slug}>{m.name}</option>
-            ))}
+            {modelList && (
+              <optgroup label={connected ? "chatgpt (your plan)" : "chatgpt (needs your account)"}>
+                {!modelList.models.some((m) => m.slug === modelList.chatgptDefault) && (
+                  <option value={modelList.chatgptDefault}>
+                    {modelList.chatgptDefault}{connected ? "" : " — connect chatgpt"}
+                  </option>
+                )}
+                {modelList.models.map((m) => (
+                  <option key={m.slug} value={m.slug}>{m.name}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
+          {isOpenRouterModel(model) && credits?.enabled && credits.remaining != null && (
+            <p className="mt-1 text-gray-600">openrouter credits: {formatCost(credits.remaining)} left</p>
+          )}
+          {needsChatGPT && (
+            <p className="mt-1 text-gray-600">
+              this model runs on your own chatgpt plus or pro plan.{" "}
+              <Link to="/settings" className="underline">connect chatgpt</Link>
+              {modelList && modelList.openrouter.length > 0 && " or pick an openrouter model"}.
+            </p>
+          )}
         </div>
         <div className="mb-3">
           <label className="block mb-1">tossups</label>
@@ -155,19 +201,14 @@ export function Generate() {
         </div>
         <button
           type="submit"
-          disabled={isGenerating || !theme.trim() || !connected}
+          disabled={isGenerating || !theme.trim() || !model || needsChatGPT}
           className="border border-black px-3 py-1 disabled:text-gray-400 disabled:border-gray-400"
         >
           generate
         </button>
       </form>
 
-      {chatgpt && !connected && (
-        <p className="mb-4 text-gray-600">
-          <Link to="/settings" className="underline">connect chatgpt</Link> to generate. it uses your own plus or pro plan.
-          generated sets join the public pool; you can make yours private from browse.
-        </p>
-      )}
+      <p className="mb-4 text-gray-600">generated sets join the public pool; you can make yours private from browse.</p>
       {error && <p className="text-red-600 mb-4">error: {error}</p>}
 
       {(isGenerating || isDone) && (

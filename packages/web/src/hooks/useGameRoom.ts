@@ -38,6 +38,8 @@ interface TossupState {
 	isPowerZone: boolean;
 	audioUrl?: string;
 	imageUrl?: string;
+	/** Set once the tossup is over (answered or dead): the whole question and its answer line, shown in place */
+	finished?: { words: string[]; answer: string; dead: boolean };
 }
 
 interface BonusState {
@@ -289,7 +291,15 @@ function reducer(state: GameState, action: Action): GameState {
 				...state,
 				neggedPlayerIds,
 				history: historyAfterResult,
-				tossup: state.tossup ? { ...state.tossup, currentBuzzes } : null,
+				tossup: state.tossup
+					? {
+						...state.tossup,
+						currentBuzzes,
+						...(action.correct
+							? { finished: { words: action.words ?? state.tossup.words, answer: action.correctAnswer ?? "", dead: false } }
+							: {}),
+					}
+					: null,
 				lastResult: {
 					playerId: action.playerId,
 					playerName: action.playerName,
@@ -306,7 +316,9 @@ function reducer(state: GameState, action: Action): GameState {
 			return {
 				...state,
 				deadAnswer: action.answer,
-				tossup: state.tossup ? { ...state.tossup } : null,
+				tossup: state.tossup
+					? { ...state.tossup, finished: { words: action.words ?? state.tossup.words, answer: action.answer, dead: true } }
+					: null,
 				history: state.tossup
 					? [...state.history, {
 						type: "tossup" as const,

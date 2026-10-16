@@ -15,26 +15,37 @@ import "./index.css";
 
 const queryClient = new QueryClient();
 
+const app = (
+  <QueryClientProvider client={queryClient}>
+    <BrowserRouter basename={ROUTER_BASENAME}>
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/" element={<Browse />} />
+          <Route path="/generate" element={<Generate />} />
+          <Route path="/play" element={<Play />} />
+          <Route path="/play/:roomCode" element={<GameRoom />} />
+          <Route path="/sets/:id" element={<SetDetail />} />
+          <Route path="/settings" element={<Settings />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  </QueryClientProvider>
+);
+
+// Local testing (LOCAL_AUTH=1, dev server only) runs without Clerk; the API signs everyone in as the local user
 const CLERK_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY;
-if (!CLERK_KEY) throw new Error("VITE_CLERK_PUBLISHABLE_KEY is not set");
+if (!CLERK_KEY && !import.meta.env.VITE_LOCAL_AUTH) {
+  throw new Error("VITE_CLERK_PUBLISHABLE_KEY is not set (for local testing without sign-in, set LOCAL_AUTH=1 in the repo-root .env.local)");
+}
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <ClerkProvider publishableKey={CLERK_KEY} afterSignOutUrl={BASE_PATH}>
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter basename={ROUTER_BASENAME}>
-        <Routes>
-          <Route element={<Layout />}>
-            <Route path="/" element={<Browse />} />
-            <Route path="/generate" element={<Generate />} />
-            <Route path="/play" element={<Play />} />
-            <Route path="/play/:roomCode" element={<GameRoom />} />
-            <Route path="/sets/:id" element={<SetDetail />} />
-            <Route path="/settings" element={<Settings />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </QueryClientProvider>
-    </ClerkProvider>
+    {import.meta.env.VITE_LOCAL_AUTH ? (
+      app
+    ) : (
+      <ClerkProvider publishableKey={CLERK_KEY!} afterSignOutUrl={BASE_PATH}>
+        {app}
+      </ClerkProvider>
+    )}
   </StrictMode>,
 );

@@ -1,8 +1,7 @@
 import { Hono } from "hono";
 import { createLogger } from "@3roads/shared";
-import { runLlmChatSimple } from "../services/llm-chat.js";
+import { defaultModelFor, runLlmChatSimple } from "../services/llm-chat.js";
 import type { TossupData } from "../game/types.js";
-import { getAccessToken } from "../services/chatgpt-auth.js";
 import { currentUser } from "../services/user-auth.js";
 
 const log = createLogger("api:picture-rounds");
@@ -46,7 +45,9 @@ async function fetchWikiThumbnail(title: string): Promise<{ imageUrl: string; an
  */
 app.get("/generate", async (c) => {
 	const user = currentUser(c);
-	if (!(await getAccessToken(user.id).catch(() => null))) {
+	// The user's ChatGPT plan when connected, otherwise OpenRouter on the server key
+	const model = await defaultModelFor(user.id);
+	if (!model) {
 		return c.json({ error: "Connect ChatGPT in settings to generate a picture round" }, 403);
 	}
 	const count = Math.min(Math.max(parseInt(c.req.query("count") ?? "10"), 1), 30);
@@ -71,6 +72,7 @@ Output ONLY a JSON array of strings, no markdown, no extra text. Example: ["Albe
 		const raw = await runLlmChatSimple({
 			prompt,
 			systemPrompt: "You are a quiz bowl expert. Output only valid JSON arrays.",
+			model,
 			userId: user.id,
 		});
 		// Strip markdown fences if present

@@ -104,6 +104,13 @@ The server verifies sessions offline with the JWT public key, so it never needs 
 | `CLERK_JWT_KEY` | API | Clerk JWT public key (PEM; `\n` escapes are accepted) |
 | `CLERK_AUTHORIZED_PARTIES` | API | Optional. Comma-separated origins, e.g. `https://3roads.nelsongong.com`. When set, only sessions minted for these origins are accepted. Unset works: game sockets are always limited to pages on the server's own host name |
 
+### Local testing without Clerk
+
+Put `LOCAL_AUTH=1` in the repo-root `.env.local` and run `pnpm dev`. Sign-in is skipped and every
+browser tab (and anyone on your network reaching the dev server) is the same local user, `local-dev`.
+It only works in development: `vite build` always ships with sign-in, and the API refuses to start
+with `LOCAL_AUTH=1` when `SERVE_STATIC` or `NODE_ENV=production` is set.
+
 ## ChatGPT for inference
 
 Generation and fuzzy answer judging run on each user's own ChatGPT Plus or Pro plan, connected in
@@ -122,6 +129,19 @@ user pastes the address their browser lands on back into settings.
 | `CHATGPT_HOST_FILE` | `data/chatgpt-host.json` | Stable, non-secret install ID OpenAI asks for; must be writable |
 
 The API needs outbound HTTPS to `auth.openai.com` and `api.openai.com`; it never contacts Clerk. Generated questions are saved in-process, only ever into the set a run was started for.
+
+### OpenRouter (optional, server-paid)
+
+When `OPENROUTER_API_KEY` is set, the generate page also offers OpenRouter models (Muse Spark and
+friends) that anyone can use without connecting ChatGPT; the server's key pays. Models are routed
+by slug: `vendor/model` goes to OpenRouter, anything else to the user's ChatGPT plan. Judging uses
+the player's ChatGPT plan when connected, otherwise OpenRouter.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OPENROUTER_API_KEY` | unset | Enables OpenRouter models; without it only ChatGPT is offered |
+| `OPENROUTER_MODEL` | `meta/muse-spark-1.3-contributor` | Default OpenRouter model (and the generate page's default when ChatGPT isn't connected) |
+| `OPENROUTER_JUDGE_MODEL` | `OPENROUTER_MODEL` | OpenRouter model for judging |
 
 ## API layout
 
