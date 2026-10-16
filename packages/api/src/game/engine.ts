@@ -1,5 +1,6 @@
-import { createLogger } from "@3roads/shared";
+import { createLogger, getDb } from "@3roads/shared";
 import { judgeAnswer } from "./judge.js";
+import { playerUserId } from "./socket-users.js";
 import { generateTTS, storeAudio } from "./tts.js";
 import type { GameRoom, GameSyncEvt, Player, ServerMessage, TossupReading } from "./types.js";
 
@@ -513,6 +514,7 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 		tossup.answer,
 		questionText,
 		room.settings.strictness,
+		playerUserId(room, playerId),
 	);
 
 	// Guard: if game state moved on during async judging (e.g. skip/end), bail out
@@ -875,7 +877,12 @@ export function handleBonusBuzz(room: GameRoom, playerId: string): void {
 	openBonusAnswering(room, br);
 }
 
-export async function handleBonusAnswer(room: GameRoom, answer: string): Promise<void> {
+export async function handleBonusAnswer(
+	room: GameRoom,
+	answer: string,
+	/** Who typed the answer: their own plan pays for LLM judging. Defaults to the controlling player. */
+	submitterId?: string,
+): Promise<void> {
 	const br = room.bonusReading;
 	if (!br) return;
 	if (room.phase !== "bonus_answering") return;
@@ -894,6 +901,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 		part.answer,
 		part.text,
 		room.settings.strictness,
+		playerUserId(room, submitterId ?? br.controllingPlayerId),
 	);
 
 	// Guard: if game state moved on during async judging, bail out
@@ -1095,6 +1103,7 @@ export function skipQuestion(room: GameRoom): void {
 }
 
 export function endGame(room: GameRoom): void {
+	if (room.phase === "game_over") return; // already ended: don't record results twice
 	cancelPendingAudioReady(room);
 	if (room.tossupReading?.intervalHandle) {
 		clearTimeout(room.tossupReading.intervalHandle);
@@ -1128,6 +1137,19 @@ export function endGame(room: GameRoom): void {
 
 	broadcast(room, { type: "phase_change", phase: "game_over" });
 	broadcast(room, { type: "game_over", players });
+
+	// History, just for fun: one row per connected player.
+	const results = Array.from(room.players.values()).flatMap((p) => {
+		const userId = playerUserId(room, p.id);
+		return userId
+			? [{ userId, setName: room.questionSetName, score: p.score, powers: p.powers, tens: p.tens, negs: p.negs }]
+			: [];
+	});
+	if (results.length > 0) {
+		getDb()
+			.gameResult.createMany({ data: results })
+			.catch((err) => log.warn(`endGame — saving results failed: ${err instanceof Error ? err.message : err}`));
+	}
 }
 
 export function nextQuestion(room: GameRoom): void {

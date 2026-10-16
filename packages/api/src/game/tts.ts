@@ -50,7 +50,7 @@ setInterval(() => {
 			audioCache.delete(id);
 		}
 	}
-}, 60_000);
+}, 60_000).unref(); // the server keeps the process alive, not this sweep
 
 // Worker pool TTS
 const POOL_SIZE = 10;

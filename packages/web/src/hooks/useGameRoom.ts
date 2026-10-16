@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
+import { authHeaders } from "../lib/api";
 import { type GameSocket, createGameSocket } from "../lib/ws";
 
 type GamePhase =
@@ -465,6 +466,9 @@ export function useGameRoom() {
 
 	const createRoom = useCallback(
 		async (questionSetId: string | undefined, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, includeBonuses?: boolean, leniency?: number, msPerWord?: number, externalPacket?: unknown }) => {
+			// The socket authenticates with Clerk's short-lived __session cookie; refresh it first
+			// in case this tab sat in the background.
+			await authHeaders();
 			connect();
 			try {
 				await socketRef.current?.ready;
@@ -478,6 +482,9 @@ export function useGameRoom() {
 
 	const joinRoom = useCallback(
 		async (roomCode: string, playerName: string) => {
+			// The socket authenticates with Clerk's short-lived __session cookie; refresh it first
+			// in case this tab sat in the background.
+			await authHeaders();
 			connect();
 			try {
 				await socketRef.current?.ready;

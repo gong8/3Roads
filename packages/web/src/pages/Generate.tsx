@@ -1,6 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useChatGPTStatus } from "./Settings";
 import { useGenerate } from "../hooks/useGenerate";
+import { apiGet } from "../lib/api";
 import { formatCost } from "../lib/format";
 
 const DIFFICULTIES = [
@@ -22,7 +25,15 @@ export function Generate() {
   const pictureCount = Math.min(tossupCount, Math.max(0, parseInt(pictureCountStr, 10) || 0));
   const [includeBonuses, setIncludeBonuses] = useState(true);
   const [difficulty, setDifficulty] = useState("Regular High School");
-  const [model, setModel] = useState("meta/muse-spark-1.3-contributor");
+  const { data: chatgpt } = useChatGPTStatus();
+  const connected = chatgpt?.connected === true;
+  const { data: modelList } = useQuery({
+    queryKey: ["chatgpt-models"],
+    queryFn: () => apiGet<{ default: string; models: { slug: string; name: string }[] }>("/me/models"),
+    enabled: connected,
+  });
+  const [chosenModel, setModel] = useState<string | null>(null);
+  const model = chosenModel ?? modelList?.default ?? "";
   const {
     isGenerating, error, setId, status,
     tossupCount: savedTossups, bonusCount: savedBonuses,
@@ -91,10 +102,12 @@ export function Generate() {
             className="border border-black px-2 py-1 font-mono"
             disabled={isGenerating}
           >
-            <option value="meta/muse-spark-1.3-contributor">Muse Spark 1.3 Contributor (Cheapest)</option>
-            <option value="meta/muse-spark-1.3">Muse Spark 1.3</option>
-            <option value="meta/muse-spark-1.2">Muse Spark 1.2</option>
-            <option value="meta/muse-glimmer-30b">Muse Glimmer 30B (Fast, Cheaper)</option>
+            {modelList && !modelList.models.some((m) => m.slug === modelList.default) && (
+              <option value={modelList.default}>{modelList.default}</option>
+            )}
+            {modelList?.models.map((m) => (
+              <option key={m.slug} value={m.slug}>{m.name}</option>
+            ))}
           </select>
         </div>
         <div className="mb-3">
@@ -139,13 +152,19 @@ export function Generate() {
         </div>
         <button
           type="submit"
-          disabled={isGenerating || !theme.trim()}
+          disabled={isGenerating || !theme.trim() || !connected}
           className="border border-black px-3 py-1 disabled:text-gray-400 disabled:border-gray-400"
         >
           generate
         </button>
       </form>
 
+      {chatgpt && !connected && (
+        <p className="mb-4 text-gray-600">
+          <Link to="/settings" className="underline">connect chatgpt</Link> to generate. it uses your own plus or pro plan.
+          generated sets join the public pool; you can make yours private from browse.
+        </p>
+      )}
       {error && <p className="text-red-600 mb-4">error: {error}</p>}
 
       {(isGenerating || isDone) && (
