@@ -2,7 +2,7 @@ import { createLogger, getDb } from "@3roads/shared";
 import { judgeAnswer } from "./judge.js";
 import { playerUserId } from "./socket-users.js";
 import { generateTTS, storeAudio } from "./tts.js";
-import type { GameRoom, GameSyncEvt, Player, ServerMessage, TossupReading } from "./types.js";
+import type { GameRoom, GameSyncEvt, Player, ServerMessage } from "./types.js";
 
 const log = createLogger("api:game:engine");
 
@@ -860,7 +860,12 @@ export function handleBonusBuzz(room: GameRoom, playerId: string): void {
 	openBonusAnswering(room, br);
 }
 
-export async function handleBonusAnswer(room: GameRoom, answer: string): Promise<void> {
+export async function handleBonusAnswer(
+	room: GameRoom,
+	answer: string,
+	/** Who typed the answer: their own plan pays for LLM judging. Defaults to the controlling player. */
+	submitterId?: string,
+): Promise<void> {
 	const br = room.bonusReading;
 	if (!br) return;
 	if (room.phase !== "bonus_answering") return;
@@ -879,7 +884,7 @@ export async function handleBonusAnswer(room: GameRoom, answer: string): Promise
 		part.answer,
 		part.text,
 		room.settings.strictness,
-		playerUserId(room, br.controllingPlayerId),
+		playerUserId(room, submitterId ?? br.controllingPlayerId),
 	);
 
 	// Guard: if game state moved on during async judging, bail out
@@ -1085,6 +1090,7 @@ export function skipQuestion(room: GameRoom): void {
 }
 
 export function endGame(room: GameRoom): void {
+	if (room.phase === "game_over") return; // already ended: don't record results twice
 	cancelPendingAudioReady(room);
 	if (room.tossupReading?.intervalHandle) {
 		clearTimeout(room.tossupReading.intervalHandle);

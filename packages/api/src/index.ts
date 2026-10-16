@@ -1,11 +1,16 @@
 import "./load-env.js";
+
+// Files the API creates (e.g. CHATGPT_HOST_FILE) are owner-only. The SQLite DB holds users'
+// ChatGPT tokens; SQLite gives its WAL files the DB file's own mode, so deploys must keep the DB
+// file itself at 600 (deploy-3roads does).
+process.umask(0o077);
 import { createServer } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { extname, join } from "node:path";
 import { getRequestListener } from "@hono/node-server";
 import { createLogger, getDb, initDb } from "@3roads/shared";
 import { Hono } from "hono";
-import { attachGameWebSocket, getActiveRoomsList } from "./game/index.js";
+import { attachGameWebSocket } from "./game/index.js";
 import { getAudio } from "./game/tts.js";
 import { foldersRoutes } from "./routes/folders.js";
 import { generateRoutes } from "./routes/generate.js";
@@ -16,7 +21,6 @@ import { setsRoutes } from "./routes/sets.js";
 import { requireUser } from "./services/user-auth.js";
 
 const log = createLogger("api");
-const routeLog = createLogger("api:routes");
 
 await initDb();
 
@@ -59,7 +63,8 @@ api.get("/audio/:id", (c) => {
 	});
 });
 
-api.get("/game/rooms", (c) => c.json(getActiveRoomsList()));
+// Unknown API paths are a JSON 404, not the SPA page.
+api.all("*", (c) => c.json({ error: "Not found" }, 404));
 
 app.route("/api", api);
 

@@ -4,7 +4,6 @@ import { WebSocketServer } from "ws";
 import { ownOrigin, userFromHeaders } from "../services/user-auth.js";
 import { socketUsers } from "./socket-users.js";
 import { handleConnection } from "./ws-handler.js";
-import { activeRooms } from "./rooms.js";
 
 const log = createLogger("api:game");
 
@@ -45,14 +44,4 @@ export function attachGameWebSocket(server: Server): void {
 	});
 
 	log.info("WebSocket server attached at /ws");
-}
-
-export function getActiveRoomsList() {
-	return Array.from(activeRooms.values()).map((room) => ({
-		code: room.code,
-		playerCount: room.players.size,
-		setName: room.questionSetName,
-		phase: room.phase,
-		mode: room.mode,
-	}));
 }

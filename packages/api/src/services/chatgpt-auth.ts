@@ -201,6 +201,11 @@ export async function getAccessToken(userId: string): Promise<string | null> {
 	if (!flight) {
 		flight = (async () => {
 			try {
+				// A refresh that finished just before this flight started has already rotated
+				// the token we read above; reusing it would revoke the whole grant.
+				const latest = await getDb().chatGPTConnection.findUnique({ where: { userId } });
+				if (!latest) return null;
+				if (latest.refreshToken !== conn.refreshToken) return latest.accessToken;
 				const tokens = await tokenRequest({
 					grant_type: "refresh_token",
 					client_id: conn.clientId,
@@ -222,6 +227,11 @@ export async function getAccessToken(userId: string): Promise<string | null> {
 					log.warn(`getAccessToken — refresh rejected (${err.code}) for user ${userId}, disconnecting`);
 					await getDb().chatGPTConnection.delete({ where: { userId } }).catch(() => {});
 					return null;
+				}
+				// A transient failure (network, 5xx) shouldn't fail callers while the token still works.
+				if (Date.now() < conn.expiresAt.getTime()) {
+					log.warn(`getAccessToken — refresh failed for user ${userId}, using current token: ${err instanceof Error ? err.message : err}`);
+					return conn.accessToken;
 				}
 				throw err;
 			} finally {

@@ -267,3 +267,25 @@ test("game sockets: same-host pages and listed origins only", async () => {
 	assert.equal(ownOrigin(undefined, "3roads.nelsongong.com"), false);
 	assert.equal(ownOrigin("null", "3roads.nelsongong.com"), false);
 });
+
+test("game history: ending a game twice records each player once", async () => {
+	const { createRoom, activeRooms } = await import("./game/rooms.js");
+	const { endGame } = await import("./game/engine.js");
+	const { socketUsers } = await import("./game/socket-users.js");
+	const db = getDb();
+	await db.user.upsert({ where: { id: "u_frank" }, create: { id: "u_frank" }, update: {} });
+	type Ws = Parameters<typeof createRoom>[3];
+	const ws = { send() {}, readyState: 1 } as unknown as Ws;
+	socketUsers.set(ws, "u_frank");
+	const packet = {
+		name: "history-pack",
+		tossups: [{ id: "t1", question: "q", answer: "a", powerMarkIndex: null, category: "c", subcategory: "s", difficulty: "d" }],
+		bonuses: [],
+	};
+	const { room } = await createRoom(undefined, "frank", "ffa", ws, false, false, undefined, undefined, packet);
+	endGame(room);
+	endGame(room);
+	await new Promise((r) => setTimeout(r, 50)); // results are written without blocking the game
+	assert.equal(await db.gameResult.count({ where: { userId: "u_frank", setName: "history-pack" } }), 1);
+	activeRooms.delete(room.code);
+});

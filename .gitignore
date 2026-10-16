@@ -9,4 +9,5 @@ data/models
 .env.local
 .venv
 .env
-settings.local.jsondata/chatgpt-host.json
+settings.local.json
+data/chatgpt-host.json

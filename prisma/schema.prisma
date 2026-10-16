@@ -94,7 +94,7 @@ model User {
 }
 
 /// A user's "Sign in with ChatGPT" grant, used for their inference. Stored server-side
-/// like monster's credential file; the database file is owner-only (mode 600).
+/// like monster's credential file; keep the database file owner-only (deploy-3roads chmods it 600).
 model ChatGPTConnection {
   userId            String    @id
   user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
