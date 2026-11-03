@@ -16,6 +16,22 @@ export const DIFFICULTIES = [
   "Open",
 ];
 
+/** College levels also show their quiz bowl "dot" rating. */
+const DIFFICULTY_DOTS: Record<string, string> = {
+  "Easy College": "1.5 dot",
+  "Regular College": "2.5 dot",
+  "Hard College": "3 dot",
+};
+
+/** How a difficulty is shown: lower case, with its dot rating where it has one. */
+export function difficultyLabel(difficulty: string): string {
+  const dots = DIFFICULTY_DOTS[difficulty];
+  return dots ? `${difficulty.toLowerCase()} (${dots})` : difficulty.toLowerCase();
+}
+
+/** Example question styles, shown wherever a set or infinite game can be given one. */
+export const STYLE_PLACEHOLDER = 'e.g. "university challenge style", "describe the steps of a proof; the theorem is the answer"';
+
 interface ModelList {
   default: string;
   chatgptConnected: boolean;

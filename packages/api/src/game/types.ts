@@ -11,6 +11,8 @@ export type GamePhase =
 	| "bonus_answering"
 	| "between_questions"
 	| "paused"
+	/** Infinite mode: the next question is still being written */
+	| "waiting_for_questions"
 	| "game_over";
 
 export type GameMode = "ffa" | "teams";
@@ -86,7 +88,34 @@ export interface GameSettings {
 	answerTimeMs: number;
 	bonusAnswerTimeMs: number;
 	strictness: number;
+	/** Ask an LLM about answers the local matcher is unsure of */
+	aiJudge: boolean;
 	ttsEnabled: boolean;
+}
+
+/** What an infinite room writes its questions about, and how it is going. */
+export interface InfiniteSettings {
+	theme: string;
+	difficulty: string;
+	/** How the host wants questions written, e.g. "university challenge style" */
+	style?: string;
+	model: string;
+	/** The host, whose plan (or the server's OpenRouter key) pays for generation */
+	userId: string;
+	includeBonuses: boolean;
+}
+
+export interface InfiniteState extends InfiniteSettings {
+	/** Every question written is saved into this set, so it can be replayed later */
+	setId: string;
+	/** OpenRouter spend on generation and judging; null while everything has run on a ChatGPT plan */
+	cost: number | null;
+	generating: boolean;
+	/** Batches in a row that produced no questions; generation gives up after a few */
+	failures: number;
+	error: string | null;
+	/** Set when the game ends so in-flight batches don't start more */
+	stopped: boolean;
 }
 
 export interface GameRoom {
@@ -112,6 +141,10 @@ export interface GameRoom {
 	pendingAudioReady: (() => void) | null;
 	audioReadyTimeout: ReturnType<typeof setTimeout> | null;
 	ttsAbort: AbortController | null;
+	/** Present for infinite rooms, which write questions as the game goes */
+	infinite: InfiniteState | null;
+	/** Wrong tossup answers on the latest tossup, which another player (or a solo player) can mark correct once it ends */
+	tossupMisses: TossupMiss[];
 }
 
 // -- Client -> Server messages --
@@ -133,7 +166,10 @@ export interface CreateRoomMsg {
 	ttsEnabled?: boolean;
 	includeBonuses?: boolean;
 	strictness?: number;
+	aiJudge?: boolean;
 	msPerWord?: number;
+	/** Write questions on this theme as the game goes, instead of playing a set */
+	infinite?: { theme: string; difficulty: string; style?: string; model?: string };
 }
 
 export interface JoinRoomMsg {
@@ -194,6 +230,7 @@ export interface SetTeamMsg {
 export interface UpdateSettingsMsg {
 	type: "update_settings";
 	strictness?: number;
+	aiJudge?: boolean;
 	msPerWord?: number;
 }
 
@@ -208,6 +245,28 @@ export interface ResumeMsg {
 export interface AnswerTypingMsg {
 	type: "answer_typing";
 	text: string;
+}
+
+/** The chat message being typed, so others see it live; empty when it's sent or abandoned. */
+export interface ChatTypingMsg {
+	type: "chat_typing";
+	text: string;
+}
+
+/** A wrong tossup answer that may later be overridden to correct. */
+export interface TossupMiss {
+	playerId: string;
+	/** Points the miss cost: -5 for a neg, 0 after the question was fully read */
+	penalty: number;
+	/** Whether the buzz came early enough to have been a power */
+	inPowerZone: boolean;
+	overridden: boolean;
+}
+
+/** Mark a wrong tossup answer correct: by another player, or by yourself when playing alone. */
+export interface OverrideAnswerMsg {
+	type: "override_answer";
+	playerId: string;
 }
 
 export interface ChatMsg {
@@ -233,6 +292,8 @@ export type ClientMessage =
 	| PauseMsg
 	| ResumeMsg
 	| AnswerTypingMsg
+	| OverrideAnswerMsg
+	| ChatTypingMsg
 	| ChatMsg;
 
 // -- Server -> Client messages --
@@ -264,6 +325,7 @@ export interface PhaseChangeEvt {
 export interface TossupStartEvt {
 	type: "tossup_start";
 	questionNumber: number;
+	/** 0 in infinite mode, where there is no last question */
 	totalQuestions: number;
 	category: string;
 	subcategory: string;
@@ -302,6 +364,30 @@ export interface AnswerPromptEvt {
 	playerName: string;
 	answer: string;
 	isBonus: boolean;
+}
+
+export interface InfiniteStatusEvt {
+	type: "infinite_status";
+	theme: string;
+	difficulty: string;
+	model: string;
+	/** OpenRouter dollars spent so far; null when everything ran on a ChatGPT plan */
+	cost: number | null;
+	generating: boolean;
+	/** Written questions not yet played */
+	ready: number;
+	/** Questions written so far */
+	written: number;
+	error: string | null;
+}
+
+export interface AnswerOverriddenEvt {
+	type: "answer_overridden";
+	playerId: string;
+	playerName: string;
+	/** Who marked it correct */
+	byName: string;
+	points: number;
 }
 
 export interface ChatEvt {
@@ -410,6 +496,13 @@ export interface TtsProgressEvt {
 	etaMs?: number;
 }
 
+export interface ChatTypingEvt {
+	type: "chat_typing";
+	playerId: string;
+	playerName: string;
+	text: string;
+}
+
 export interface AnswerTypingEvt {
 	type: "answer_typing";
 	playerName: string;
@@ -457,6 +550,9 @@ export type ServerMessage =
 	| AnswerResultEvt
 	| AnswerPromptEvt
 	| ChatEvt
+	| AnswerOverriddenEvt
+	| ChatTypingEvt
+	| InfiniteStatusEvt
 	| TossupDeadEvt
 	| PictureBuzzWindowEvt
 	| BonusStartEvt

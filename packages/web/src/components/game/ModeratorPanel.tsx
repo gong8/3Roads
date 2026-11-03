@@ -6,13 +6,15 @@ interface Props {
 	onNext: () => void;
 	onEndGame: () => void;
 	onKick: (playerId: string) => void;
-	onUpdateSettings: (settings: { strictness?: number; msPerWord?: number }) => void;
+	onUpdateSettings: (settings: { strictness?: number; msPerWord?: number; aiJudge?: boolean }) => void;
 	players: { id: string; name: string; isModerator: boolean }[];
 	ttsEnabled?: boolean;
+	aiJudge?: boolean;
 }
 
-export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpdateSettings, players, ttsEnabled }: Props) {
+export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpdateSettings, players, ttsEnabled, aiJudge: initialAiJudge = false }: Props) {
 	const kickable = players.filter((p) => !p.isModerator);
+	const [aiJudge, setAiJudge] = useState(initialAiJudge);
 	const [leniency, setLeniency] = useState(7);
 	const [wordsPerSec, setWordsPerSec] = useState(4.5);
 	const [isOpen, setIsOpen] = useState(false);
@@ -58,6 +60,18 @@ export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpd
 
 					<div className="flex flex-col gap-4 mb-6 border-b border-gray-100 pb-4">
 						<div className="text-xs text-gray-500">settings</div>
+						<label className="text-xs text-gray-600 flex items-center gap-2">
+							<input
+								type="checkbox"
+								checked={aiJudge}
+								onChange={(e) => {
+									setAiJudge(e.target.checked);
+									onUpdateSettings({ aiJudge: e.target.checked });
+								}}
+							/>
+							ai judge
+						</label>
+						{aiJudge && (
 						<div>
 							<label className="text-xs text-gray-600 block mb-1">
 								leniency: {leniency}/10
@@ -76,6 +90,7 @@ export function ModeratorPanel({ phase, onSkip, onNext, onEndGame, onKick, onUpd
 								className="w-full"
 							/>
 						</div>
+					)}
 						
 						{!ttsEnabled && (
 						<div>

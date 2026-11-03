@@ -1,8 +1,9 @@
 import { createLogger, getDb } from "@3roads/shared";
 import type { WebSocket } from "ws";
+import { createInfiniteState, stopInfinite } from "./infinite.js";
 import { socketUsers } from "./socket-users.js";
 import { deleteAudio } from "./tts.js";
-import type { BonusData, ExternalPacket, GameMode, GameRoom, Player, TossupData } from "./types.js";
+import type { BonusData, CreateRoomMsg, ExternalPacket, GameMode, GameRoom, InfiniteState, Player, TossupData } from "./types.js";
 
 const log = createLogger("api:game:rooms");
 
@@ -26,6 +27,50 @@ function generateRoomCode(): string {
 	throw new Error("Failed to generate unique room code");
 }
 
+interface DbTossup {
+	id: string;
+	question: string;
+	answer: string;
+	powerMarkIndex: number | null;
+	imageUrl: string | null;
+	category: string;
+	subcategory: string;
+	difficulty: string;
+}
+
+interface DbBonus {
+	id: string;
+	leadin: string;
+	category: string;
+	subcategory: string;
+	difficulty: string;
+	parts: { partNum: number; text: string; answer: string; value: number }[];
+}
+
+export function toTossupData(t: DbTossup): TossupData {
+	return {
+		id: t.id,
+		question: t.question,
+		answer: t.answer,
+		powerMarkIndex: t.powerMarkIndex,
+		imageUrl: t.imageUrl ?? undefined,
+		category: t.category,
+		subcategory: t.subcategory,
+		difficulty: t.difficulty,
+	};
+}
+
+export function toBonusData(b: DbBonus): BonusData {
+	return {
+		id: b.id,
+		leadin: b.leadin,
+		category: b.category,
+		subcategory: b.subcategory,
+		difficulty: b.difficulty,
+		parts: b.parts.map((p) => ({ partNum: p.partNum, text: p.text, answer: p.answer, value: p.value })),
+	};
+}
+
 function generatePlayerId(): string {
 	return Math.random().toString(36).slice(2, 10);
 }
@@ -40,13 +85,23 @@ export async function createRoom(
 	strictness?: number,
 	msPerWord?: number,
 	externalPacket?: ExternalPacket,
+	infiniteOptions?: CreateRoomMsg["infinite"],
+	aiJudge = false,
 ): Promise<{ room: GameRoom; playerId: string }> {
 	let tossups: TossupData[];
 	let bonuses: BonusData[];
 	let setName: string;
 	let resolvedSetId: string;
+	let infinite: InfiniteState | null = null;
 
-	if (externalPacket) {
+	if (infiniteOptions) {
+		// Questions arrive once the game is under way; the room starts empty
+		infinite = await createInfiniteState(socketUsers.get(ws), infiniteOptions, includeBonuses !== false);
+		tossups = [];
+		bonuses = [];
+		setName = `${infinite.theme} (infinite)`;
+		resolvedSetId = infinite.setId;
+	} else if (externalPacket) {
 		// Use pre-fetched external packet (e.g. from QB Reader) — no DB lookup needed
 		tossups = externalPacket.tossups;
 		bonuses = includeBonuses === false ? [] : externalPacket.bonuses;
@@ -69,38 +124,17 @@ export async function createRoom(
 		});
 
 		if (!set) throw new Error("Question set not found");
+		if (set.status === "generating") throw new Error("That set is still being generated");
 		if (set.tossups.length === 0) throw new Error("Question set has no tossups");
 
-		tossups = set.tossups.map((t) => ({
-			id: t.id,
-			question: t.question,
-			answer: t.answer,
-			powerMarkIndex: t.powerMarkIndex,
-			imageUrl: t.imageUrl ?? undefined,
-			category: t.category,
-			subcategory: t.subcategory,
-			difficulty: t.difficulty,
-		}));
-
-		bonuses = (includeBonuses === false ? [] : set.bonuses).map((b) => ({
-			id: b.id,
-			leadin: b.leadin,
-			category: b.category,
-			subcategory: b.subcategory,
-			difficulty: b.difficulty,
-			parts: b.parts.map((p) => ({
-				partNum: p.partNum,
-				text: p.text,
-				answer: p.answer,
-				value: p.value,
-			})),
-		}));
+		tossups = set.tossups.map(toTossupData);
+		bonuses = (includeBonuses === false ? [] : set.bonuses).map(toBonusData);
 
 		setName = set.name;
 		resolvedSetId = questionSetId;
 	}
 
-	if (tossups.length === 0) throw new Error("Packet has no tossups");
+	if (tossups.length === 0 && !infinite) throw new Error("Packet has no tossups");
 
 	const code = generateRoomCode();
 	const playerId = generatePlayerId();
@@ -135,7 +169,9 @@ export async function createRoom(
 			answerTimeMs: 8000,
 			bonusAnswerTimeMs: 10000,
 			strictness: strictness ?? 7,
-			ttsEnabled,
+			aiJudge: aiJudge === true,
+			// Audio is pregenerated for the whole set up front, which infinite rooms don't have
+			ttsEnabled: ttsEnabled && !infinite,
 		},
 		lastActivity: Date.now(),
 		answerTimer: null,
@@ -147,6 +183,8 @@ export async function createRoom(
 		pendingAudioReady: null,
 		audioReadyTimeout: null,
 		ttsAbort: null,
+		infinite,
+		tossupMisses: [],
 	};
 
 	activeRooms.set(code, room);
@@ -284,6 +322,7 @@ function cleanupRoom(roomCode: string): void {
 		room.ttsAbort = null;
 	}
 	for (const { audioId } of room.ttsCache.values()) deleteAudio(audioId);
+	void stopInfinite(room);
 
 	activeRooms.delete(roomCode);
 	log.info(`Room ${roomCode} cleaned up`);

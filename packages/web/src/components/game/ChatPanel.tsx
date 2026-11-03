@@ -7,10 +7,14 @@ interface Props {
 	open: boolean;
 	onSend: (text: string) => void;
 	onClose: () => void;
+	/** What the input holds as it changes; empty once sent or abandoned */
+	onTyping: (text: string) => void;
+	/** Messages other players are typing right now */
+	typing: { playerName: string; text: string }[];
 }
 
 /** Room chat log. The input opens on Enter (handled by the page) and closes on send or Escape. */
-export function ChatPanel({ messages, currentPlayerId, open, onSend, onClose }: Props) {
+export function ChatPanel({ messages, currentPlayerId, open, onSend, onClose, onTyping, typing }: Props) {
 	const [value, setValue] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
 	const logRef = useRef<HTMLDivElement>(null);
@@ -25,7 +29,13 @@ export function ChatPanel({ messages, currentPlayerId, open, onSend, onClose }: 
 		if (lastSentAt) logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
 	}, [lastSentAt]);
 
-	if (messages.length === 0 && !open) {
+	const close = () => {
+		setValue("");
+		onTyping("");
+		onClose();
+	};
+
+	if (messages.length === 0 && !open && typing.length === 0) {
 		return <div className="mt-4 text-xs text-gray-400">press enter to chat</div>;
 	}
 
@@ -40,6 +50,11 @@ export function ChatPanel({ messages, currentPlayerId, open, onSend, onClose }: 
 						<span className="break-words">{m.text}</span>
 					</div>
 				))}
+				{typing.map((t) => (
+					<div key={`typing-${t.playerName}`} className="text-gray-400 italic">
+						{t.playerName}: <span className="break-words">{t.text}</span>…
+					</div>
+				))}
 			</div>
 			{open ? (
 				<input
@@ -47,19 +62,20 @@ export function ChatPanel({ messages, currentPlayerId, open, onSend, onClose }: 
 					type="text"
 					value={value}
 					maxLength={300}
-					onChange={(e) => setValue(e.target.value)}
+					onChange={(e) => {
+						setValue(e.target.value);
+						onTyping(e.target.value);
+					}}
 					onKeyDown={(e) => {
 						if (e.key === "Enter") {
 							e.preventDefault();
 							if (value.trim()) onSend(value);
-							setValue("");
-							onClose();
+							close();
 						} else if (e.key === "Escape") {
-							setValue("");
-							onClose();
+							close();
 						}
 					}}
-					onBlur={onClose}
+					onBlur={close}
 					className="mt-2 w-full border border-black px-2 py-1 text-xs font-mono"
 					placeholder="chat... (enter to send, esc to close)"
 				/>

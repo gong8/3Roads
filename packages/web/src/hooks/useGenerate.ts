@@ -1,20 +1,13 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPost } from "../lib/api";
 
-type Status = "idle" | "generating" | "complete" | "error";
+type Status = "generating" | "complete" | "error";
 
-interface SetResponse {
-  id: string;
-  status: Status;
-  cost: number | null;
-  tossups: unknown[];
-  bonuses: unknown[];
-}
-
-interface GenerateState {
-  isGenerating: boolean;
-  setId: string | null;
+/** One set being written (or finished) from the generate page. */
+export interface GenerateRun {
+  setId: string;
+  name: string;
   status: Status;
   tossupCount: number;
   bonusCount: number;
@@ -24,113 +17,115 @@ interface GenerateState {
   error: string | null;
 }
 
-export function useGenerate() {
-  const [state, setState] = useState<GenerateState>({
-    isGenerating: false,
-    setId: null,
-    status: "idle",
-    tossupCount: 0,
-    bonusCount: 0,
-    targetTossups: 0,
-    targetBonuses: 0,
-    cost: null,
-    error: null,
-  });
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const qc = useQueryClient();
+export interface GenerateRequest {
+  theme: string;
+  tossupCount: number;
+  bonusCount: number;
+  difficulty: string;
+  model: string;
+  pictureCount: number;
+  style: string;
+  /** Separate sets on the same settings; the server keeps their answers apart */
+  packetCount: number;
+}
 
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
+interface SetSummary {
+  id: string;
+  status: string;
+  cost: number | null;
+  tossupCount?: number;
+  bonusCount?: number;
+}
+
+// Runs live outside the page, so they keep their place when you navigate away and come back
+let runs: GenerateRun[] = [];
+const listeners = new Set<() => void>();
+
+function setRuns(next: GenerateRun[]) {
+  runs = next;
+  for (const l of listeners) l();
+}
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+/** Update each in-progress run from the set list: one request however many are running. */
+async function refreshRuns(): Promise<boolean> {
+  const sets = await apiGet<SetSummary[]>("/sets");
+  const byId = new Map(sets.map((s) => [s.id, s]));
+  let finished = false;
+  setRuns(runs.map((run) => {
+    if (run.status !== "generating") return run;
+    const set = byId.get(run.setId);
+    if (!set) {
+      // The server deletes sets that finish with no questions (see generate-orchestrator)
+      finished = true;
+      return { ...run, status: "error", error: "no questions were produced (check API logs)" };
     }
-  }, []);
+    const status = set.status === "complete" || set.status === "error" ? set.status : "generating";
+    if (status !== "generating") finished = true;
+    return {
+      ...run,
+      status,
+      tossupCount: set.tossupCount ?? 0,
+      bonusCount: set.bonusCount ?? 0,
+      cost: set.cost,
+      error: status === "error" ? "generation failed" : null,
+    };
+  }));
+  return finished;
+}
 
-  // Cleanup on unmount
-  useEffect(() => stopPolling, [stopPolling]);
+export function useGenerate() {
+  const current = useSyncExternalStore(subscribe, () => runs);
+  const qc = useQueryClient();
+  const anyGenerating = current.some((r) => r.status === "generating");
 
-  const generate = useCallback(async (
-    theme: string,
-    tossupCount: number,
-    bonusCount: number,
-    difficulty: string,
-    model: string,
-    pictureCount = 0,
-  ) => {
-    stopPolling();
+  useEffect(() => {
+    if (!anyGenerating) return;
+    const id = setInterval(async () => {
+      try {
+        if (await refreshRuns()) qc.invalidateQueries({ queryKey: ["sets"] });
+      } catch {
+        // Transient — keep trying
+      }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [anyGenerating, qc]);
 
-    setState({
-      isGenerating: true,
-      setId: null,
+  /** Start a request; its packets join the list. Throws if the server refuses it. */
+  const start = useCallback(async (req: GenerateRequest) => {
+    const res = await apiPost<{ sets: { id: string; name: string }[] }>("/generate", {
+      theme: req.theme,
+      tossupCount: req.tossupCount,
+      bonusCount: req.bonusCount,
+      pictureCount: req.pictureCount,
+      difficulty: req.difficulty,
+      style: req.style || undefined,
+      packetCount: req.packetCount,
+      model: req.model,
+    });
+    const added: GenerateRun[] = res.sets.map((s) => ({
+      setId: s.id,
+      name: s.name,
       status: "generating",
       tossupCount: 0,
       bonusCount: 0,
-      targetTossups: tossupCount,
-      targetBonuses: bonusCount,
+      targetTossups: req.tossupCount,
+      targetBonuses: req.bonusCount,
       cost: null,
       error: null,
-    });
+    }));
+    setRuns([...added, ...runs]);
+  }, []);
 
-    try {
-      const res = await apiPost<{ setId: string }>("/generate", {
-        theme,
-        tossupCount,
-        bonusCount,
-        pictureCount,
-        difficulty,
-        model,
-      });
+  const dismiss = useCallback((setId: string) => {
+    setRuns(runs.filter((r) => r.setId !== setId));
+  }, []);
 
-      setState((s) => ({ ...s, setId: res.setId }));
-
-      // Start polling
-      pollRef.current = setInterval(async () => {
-        try {
-          const set = await apiGet<SetResponse>(`/sets/${res.setId}`);
-          const tc = set.tossups?.length ?? 0;
-          const bc = set.bonuses?.length ?? 0;
-          const status = set.status as Status;
-
-          setState((s) => ({
-            ...s,
-            tossupCount: tc,
-            bonusCount: bc,
-            status,
-          }));
-
-          if (status === "complete" || status === "error") {
-            stopPolling();
-            setState((s) => ({
-              ...s,
-              isGenerating: false,
-              cost: set.cost,
-              error: status === "error" ? "Generation failed" : null,
-            }));
-            qc.invalidateQueries({ queryKey: ["sets"] });
-          }
-        } catch (err) {
-          // 404: the server deletes sets that finish with no questions (see
-          // generate-orchestrator), often before we observe status "error".
-          // Other errors are transient — keep trying.
-          if ((err as { status?: number }).status === 404) {
-            stopPolling();
-            setState((s) => ({
-              ...s,
-              isGenerating: false,
-              status: "error",
-              error: "Generation failed — no questions were produced (check API logs)",
-            }));
-          }
-        }
-      }, 2000);
-    } catch (err) {
-      setState((s) => ({
-        ...s,
-        isGenerating: false,
-        error: (err as Error).message,
-      }));
-    }
-  }, [stopPolling, qc]);
-
-  return { ...state, generate };
+  return { runs: current, start, dismiss };
 }

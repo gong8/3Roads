@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
+import { DIFFICULTIES, difficultyLabel, ModelSelect, STYLE_PLACEHOLDER, useModelChoice } from "../components/ModelSelect";
 import { useSets } from "../hooks/useSets";
 import { apiGet } from "../lib/api";
 
@@ -49,7 +50,7 @@ function randomDefaultName(): string {
 }
 
 type Tab = "create" | "join";
-type PacketSource = "my-sets" | "all-packets";
+type PacketSource = "my-sets" | "all-packets" | "infinite";
 
 interface QbPacketData {
 	name: string;
@@ -62,11 +63,14 @@ export function Play() {
 	const [tab, setTab] = useState<Tab>("create");
 	const [name, setName] = useState(() => randomDefaultName());
 	const [roomCode, setRoomCode] = useState("");
-	const [selectedSetId, setSelectedSetId] = useState("");
+	// Browse's play button arrives with ?set=<id> preselected
+	const [searchParams] = useSearchParams();
+	const [selectedSetId, setSelectedSetId] = useState(() => searchParams.get("set") ?? "");
 	const [mode, setMode] = useState<"ffa" | "teams">("ffa");
 	const [ttsEnabled, setTtsEnabled] = useState(false);
 	const [includeBonuses, setIncludeBonuses] = useState(true);
 	const [leniency, setLeniency] = useState(7);
+	const [aiJudge, setAiJudge] = useState(false);
 	const [wordsPerSec, setWordsPerSec] = useState(4.5);
 	const [error, setError] = useState<string | null>(null);
 
@@ -78,7 +82,15 @@ export function Play() {
 	const [qbSearchOpen, setQbSearchOpen] = useState(false);
 	const searchRef = useRef<HTMLDivElement>(null);
 
-	const { data: sets } = useSets();
+	// Infinite mode: questions are written on this theme as the game goes
+	const [infiniteTheme, setInfiniteTheme] = useState("");
+	const [infiniteDifficulty, setInfiniteDifficulty] = useState("Regular High School");
+	const [infiniteStyle, setInfiniteStyle] = useState("");
+	const modelChoice = useModelChoice();
+
+	const { data: allSets } = useSets();
+	// Sets still being written (including running infinite games) aren't ready to play
+	const sets = useMemo(() => allSets?.filter((s) => s.status !== "generating"), [allSets]);
 
 	// Fetch QB Reader set list when "all packets" tab is active
 	const { data: qbSetsData, isLoading: qbSetsLoading, isError: qbSetsError } = useQuery({
@@ -135,10 +147,25 @@ export function Play() {
 		if (!name.trim()) { setError("enter a name"); return; }
 		const msPerWord = Math.round(1000 / wordsPerSec);
 
-		if (packetSource === "my-sets") {
+		if (packetSource === "infinite") {
+			if (!infiniteTheme.trim()) { setError("enter a theme"); return; }
+			if (!modelChoice.model || modelChoice.needsChatGPT) { setError("pick a model you can use"); return; }
+			navigate("/play/new", {
+				state: {
+					action: "create",
+					playerName: name.trim(),
+					mode,
+					includeBonuses,
+					leniency,
+					aiJudge,
+					readingSpeed: msPerWord,
+					infinite: { theme: infiniteTheme.trim(), difficulty: infiniteDifficulty, style: infiniteStyle.trim() || undefined, model: modelChoice.model },
+				},
+			});
+		} else if (packetSource === "my-sets") {
 			if (!selectedSetId) { setError("select a question set"); return; }
 			navigate("/play/new", {
-				state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled, includeBonuses: includeBonuses && setHasBonuses, leniency, readingSpeed: msPerWord },
+				state: { action: "create", questionSetId: selectedSetId, playerName: name.trim(), mode, ttsEnabled, includeBonuses: includeBonuses && setHasBonuses, leniency, aiJudge, readingSpeed: msPerWord },
 			});
 		} else {
 			// All Packets: fetch the packet now, then navigate with the data
@@ -166,6 +193,7 @@ export function Play() {
 					ttsEnabled,
 					includeBonuses,
 					leniency,
+					aiJudge,
 					readingSpeed: msPerWord,
 					externalPacket: packet,
 				},
@@ -222,6 +250,13 @@ export function Play() {
 								className={`text-sm border px-3 py-0.5 ${packetSource === "all-packets" ? "border-black bg-black text-white" : "border-gray-300 text-gray-500"}`}
 							>
 								all packets
+							</button>
+							<button
+								type="button"
+								onClick={() => setPacketSource("infinite")}
+								className={`text-sm border px-3 py-0.5 ${packetSource === "infinite" ? "border-black bg-black text-white" : "border-gray-300 text-gray-500"}`}
+							>
+								infinite
 							</button>
 						</div>
 					</div>
@@ -343,6 +378,52 @@ export function Play() {
 						</div>
 					)}
 
+					{packetSource === "infinite" && (
+						<>
+							<p className="mb-3 text-xs text-gray-500 max-w-xs">
+								questions are written as you play, a few ahead of the game. it keeps going until you end it, and everything written is saved as a set.
+							</p>
+							<div className="mb-3">
+								<label className="block text-xs text-gray-500 mb-1">theme</label>
+								<input
+									type="text"
+									value={infiniteTheme}
+									onChange={(e) => setInfiniteTheme(e.target.value)}
+									className="border border-black px-2 py-1 text-sm w-full max-w-xs"
+									placeholder="e.g. American Civil War, Organic Chemistry"
+									maxLength={80}
+								/>
+							</div>
+							<div className="mb-3">
+								<label className="block text-xs text-gray-500 mb-1">question style (optional)</label>
+								<textarea
+									value={infiniteStyle}
+									onChange={(e) => setInfiniteStyle(e.target.value)}
+									className="border border-black px-2 py-1 text-sm w-full max-w-xs"
+									placeholder={STYLE_PLACEHOLDER}
+									maxLength={300}
+									rows={2}
+								/>
+							</div>
+							<div className="mb-3">
+								<label className="block text-xs text-gray-500 mb-1">difficulty</label>
+								<select
+									value={infiniteDifficulty}
+									onChange={(e) => setInfiniteDifficulty(e.target.value)}
+									className="border border-black px-2 py-1 text-sm w-full max-w-xs"
+								>
+									{DIFFICULTIES.map((d) => (
+										<option key={d} value={d}>{difficultyLabel(d)}</option>
+									))}
+								</select>
+							</div>
+							<div className="mb-3 text-xs">
+								<label className="block text-gray-500 mb-1">model</label>
+								<ModelSelect choice={modelChoice} className="text-sm w-full max-w-xs" />
+							</div>
+						</>
+					)}
+
 					<div className="mb-3">
 						<label className="block text-xs text-gray-500 mb-1">mode</label>
 						<select
@@ -359,9 +440,9 @@ export function Play() {
 							<input
 								type="checkbox"
 								checked={
-									packetSource === "all-packets"
-										? includeBonuses
-										: includeBonuses && setHasBonuses
+									packetSource === "my-sets"
+										? includeBonuses && setHasBonuses
+										: includeBonuses
 								}
 								onChange={(e) => setIncludeBonuses(e.target.checked)}
 								disabled={packetSource === "my-sets" && !setHasBonuses}
@@ -376,26 +457,37 @@ export function Play() {
 						<label className="text-xs text-gray-500 flex items-center gap-2">
 							<input
 								type="checkbox"
-								checked={ttsEnabled}
+								checked={ttsEnabled && packetSource !== "infinite"}
 								onChange={(e) => setTtsEnabled(e.target.checked)}
+								disabled={packetSource === "infinite"}
 							/>
 							text-to-speech
+							{packetSource === "infinite" && <span className="text-gray-400">(not available in infinite mode)</span>}
 						</label>
 					</div>
 					<div className="mb-3">
-						<label className="text-xs text-gray-500 block mb-1">
-							leniency: {leniency}/10
+						<label className="text-xs text-gray-500 flex items-center gap-2">
+							<input type="checkbox" checked={aiJudge} onChange={(e) => setAiJudge(e.target.checked)} />
+							ai judge
+							<span className="text-gray-400">(asks an llm about answers the matcher is unsure of)</span>
 						</label>
-						<input
-							type="range"
-							min={1}
-							max={10}
-							step={1}
-							value={leniency}
-							onChange={(e) => setLeniency(Number(e.target.value))}
-							className="w-48"
-						/>
 					</div>
+					{aiJudge && (
+						<div className="mb-3">
+							<label className="text-xs text-gray-500 block mb-1">
+								leniency: {leniency}/10
+							</label>
+							<input
+								type="range"
+								min={1}
+								max={10}
+								step={1}
+								value={leniency}
+								onChange={(e) => setLeniency(Number(e.target.value))}
+								className="w-48"
+							/>
+						</div>
+					)}
 					<div className="mb-3">
 						<label className="text-xs text-gray-500 block mb-1">
 							reading speed: {wordsPerSec.toFixed(1)} words/s

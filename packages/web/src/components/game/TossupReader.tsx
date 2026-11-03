@@ -76,7 +76,8 @@ export function TossupReader({ words, isPowerZone, category, subcategory, questi
 		<div className="border border-black p-3 mb-3">
 			<div className="flex justify-between text-xs text-gray-500 mb-2">
 				<span>{category} / {subcategory}</span>
-				<span>{questionNumber} / {totalQuestions}</span>
+				{/* totalQuestions is 0 in infinite mode, which has no last question */}
+				<span>{totalQuestions > 0 ? `${questionNumber} / ${totalQuestions}` : questionNumber}</span>
 			</div>
 			{imageUrl && countdown !== null && (
 				<div className="flex flex-col items-center justify-center h-40 border border-gray-200 mb-3 bg-gray-50">

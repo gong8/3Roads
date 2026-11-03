@@ -7,7 +7,7 @@
     "build": "tsup",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test src/api.test.ts"
+    "test": "tsx --test src/api.test.ts src/game/judge.test.ts"
   },
   "dependencies": {
     "@3roads/shared": "workspace:*",
