@@ -143,6 +143,15 @@ the player's ChatGPT plan when connected, otherwise OpenRouter.
 | `OPENROUTER_MODEL` | `meta/muse-spark-1.3-contributor` | Default OpenRouter model (and the generate page's default when ChatGPT isn't connected) |
 | `OPENROUTER_JUDGE_MODEL` | `OPENROUTER_MODEL` | OpenRouter model for judging |
 
+### Infinite mode
+
+Choosing **infinite** as the question source on the play page starts a room with no set: it writes
+questions on a theme in batches of 5 while the game runs, staying 3 tossups ahead of play
+(`packages/api/src/game/infinite.ts`). The host's chosen model pays. The room shows the running
+OpenRouter spend (generation plus judging), and everything written is saved as a
+"<theme> (infinite)" set the host owns. Text-to-speech is off in this mode because audio is
+pregenerated up front.
+
 ## API layout
 
 The API is served under `/api` (below `VITE_BASE_PATH` when set), so it never collides with app

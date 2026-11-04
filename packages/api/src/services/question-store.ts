@@ -28,6 +28,41 @@ export interface BonusInput {
 
 export class InvalidQuestions extends Error {}
 
+/**
+ * Move a date qualifier out of the required part: "{Chilean coup of 1973}" becomes
+ * "{Chilean coup} of 1973", since players needn't say the year.
+ */
+export function tidyAnswerBraces(answer: string): string {
+	return answer.replace(/\{([^{}]*?)\s+((?:of|in)\s+\d{3,4}|\(\d{3,4}\)|\d{3,4})\}/g, "{$1} $2");
+}
+
+const LEAK_STOPWORDS = new Set(["the", "and", "of", "for", "with", "from", "this", "that"]);
+
+/**
+ * The answer words a question must not contain: the braced part's words if there is one,
+ * otherwise the answer's longest word ("Mauchly" in "John Mauchly"), since other words like
+ * first names can fairly appear in clues.
+ */
+function giveawayWords(answer: string): string[] {
+	const words = (text: string) =>
+		text.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 4 && !LEAK_STOPWORDS.has(w));
+	const required = [...answer.matchAll(/\{([^}]*)\}/g)].map((m) => m[1]).join(" ");
+	if (required) return words(required);
+	const all = words(answer.replace(/\s*\[[^\]]*\]/g, ""));
+	return all.length > 0 ? [all.reduce((a, b) => (b.length > a.length ? b : a))] : [];
+}
+
+/** Descriptions of questions whose text names their own answer, e.g. "Eckert-Mauchly" for Mauchly. */
+export function answerLeaks(questions: { text: string; answer: string }[]): string[] {
+	const leaks: string[] = [];
+	questions.forEach(({ text, answer }, i) => {
+		const textWords = new Set(text.toLowerCase().split(/[^a-z0-9]+/));
+		const named = giveawayWords(answer).filter((w) => textWords.has(w));
+		if (named.length > 0) leaks.push(`#${i + 1} (answer "${answer}") contains "${named.join('", "')}"`);
+	});
+	return leaks;
+}
+
 export async function saveTossups(setId: string, tossups: TossupInput[]) {
 	if (!Array.isArray(tossups) || tossups.length === 0) {
 		throw new InvalidQuestions("tossups array is required and must not be empty");
@@ -42,7 +77,7 @@ export async function saveTossups(setId: string, tossups: TossupInput[]) {
 			data: tossups.map((t) => ({
 				setId,
 				question: t.question,
-				answer: t.answer,
+				answer: tidyAnswerBraces(t.answer),
 				powerMarkIndex: t.powerMarkIndex ?? null,
 				imageUrl: t.imageUrl ?? null,
 				category: t.category,
@@ -78,9 +113,9 @@ export async function saveBonuses(setId: string, bonuses: BonusInput[]) {
 			});
 			await tx.bonusPart.createMany({
 				data: [
-					{ bonusId: bonus.id, partNum: 1, text: b.part1Text, answer: b.part1Answer, value: 10 },
-					{ bonusId: bonus.id, partNum: 2, text: b.part2Text, answer: b.part2Answer, value: 10 },
-					{ bonusId: bonus.id, partNum: 3, text: b.part3Text, answer: b.part3Answer, value: 10 },
+					{ bonusId: bonus.id, partNum: 1, text: b.part1Text, answer: tidyAnswerBraces(b.part1Answer), value: 10 },
+					{ bonusId: bonus.id, partNum: 2, text: b.part2Text, answer: tidyAnswerBraces(b.part2Answer), value: 10 },
+					{ bonusId: bonus.id, partNum: 3, text: b.part3Text, answer: tidyAnswerBraces(b.part3Answer), value: 10 },
 				],
 			});
 		}

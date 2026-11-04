@@ -1,7 +1,7 @@
 import { createLogger } from "@3roads/shared";
 import { getAccessToken, RESOURCE } from "./chatgpt-auth.js";
 import { LineBuffer } from "./line-buffer.js";
-import { type BonusInput, saveBonuses, saveTossups, type TossupInput } from "./question-store.js";
+import { answerLeaks, type BonusInput, saveBonuses, saveTossups, type TossupInput } from "./question-store.js";
 
 // Inference runs on the signed-in user's ChatGPT plan through the Responses API.
 // Requests follow the plan-usage rules: store:false, stream:true, instructions
@@ -212,6 +212,23 @@ async function callSaveTool(setId: string, call: FunctionCall): Promise<{ text: 
 		return { text: `Error: invalid JSON arguments: ${err instanceof Error ? err.message : err}`, isError: true };
 	}
 	try {
+		// Generated questions that name their own answer are sent back to be rewritten, not saved
+		const leaks =
+			call.name === `${TOOL_PREFIX}save_tossups_batch`
+				? answerLeaks((args.tossups ?? []).map((t) => ({ text: t.question ?? "", answer: t.answer ?? "" })))
+				: answerLeaks(
+						(args.bonuses ?? []).flatMap((b) => [
+							{ text: b.part1Text ?? "", answer: b.part1Answer ?? "" },
+							{ text: b.part2Text ?? "", answer: b.part2Answer ?? "" },
+							{ text: b.part3Text ?? "", answer: b.part3Answer ?? "" },
+						]),
+					);
+		if (leaks.length > 0) {
+			return {
+				text: `Error: nothing was saved. These questions name their own answer in the question text: ${leaks.join("; ")}. Rewrite those clues without the answer or any part of it, then call the tool again with the full batch.`,
+				isError: true,
+			};
+		}
 		if (call.name === `${TOOL_PREFIX}save_tossups_batch`) {
 			await saveTossups(setId, args.tossups ?? []);
 			return { text: `Saved ${args.tossups?.length} tossups.`, isError: false };

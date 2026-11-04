@@ -8,6 +8,8 @@ import { BASE_PATH, ROUTER_BASENAME } from "./lib/base-path";
 import { Browse } from "./pages/Browse";
 import { GameRoom } from "./pages/GameRoom";
 import { Generate } from "./pages/Generate";
+import { Learn } from "./pages/Learn";
+import { LearnDrill } from "./pages/LearnDrill";
 import { Play } from "./pages/Play";
 import { SetDetail } from "./pages/SetDetail";
 import { Settings } from "./pages/Settings";
@@ -22,6 +24,8 @@ const app = (
         <Route element={<Layout />}>
           <Route path="/" element={<Browse />} />
           <Route path="/generate" element={<Generate />} />
+          <Route path="/learn" element={<Learn />} />
+          <Route path="/learn/:id" element={<LearnDrill />} />
           <Route path="/play" element={<Play />} />
           <Route path="/play/:roomCode" element={<GameRoom />} />
           <Route path="/sets/:id" element={<SetDetail />} />

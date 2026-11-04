@@ -10,6 +10,7 @@ import {
 	handleBonusBuzz,
 	handleBuzz,
 	nextQuestion,
+	overrideAnswer,
 	pauseGame,
 	resumeGame,
 	sendTo,
@@ -18,6 +19,7 @@ import {
 	startGame,
 	buildGameSync,
 } from "./engine.js";
+import { infiniteStatus, topUpInfinite } from "./infinite.js";
 import {
 	activeRooms,
 	createRoom,
@@ -26,12 +28,14 @@ import {
 	reconnectPlayer,
 	removePlayer,
 } from "./rooms.js";
-import type { ClientMessage, ExternalPacket, GameRoom, ServerMessage } from "./types.js";
+import type { ClientMessage, CreateRoomMsg, ExternalPacket, GameRoom, ServerMessage } from "./types.js";
 
 const log = createLogger("api:game:ws");
 
 // Map from WebSocket to player context
 const wsContext = new Map<WebSocket, { roomCode: string; playerId: string }>();
+/** Sockets with a create or join still in progress */
+const entering = new WeakSet<WebSocket>();
 
 export async function handleConnection(ws: WebSocket): Promise<void> {
 	log.info("New WebSocket connection");
@@ -84,13 +88,23 @@ function sendRaw(ws: WebSocket, msg: ServerMessage): void {
 }
 
 async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
+	// A socket joins one room once; a repeat (e.g. React StrictMode re-running the mount effect)
+	// would add the player twice on the same socket and double every broadcast they receive
+	if (msg.type === "create_room" || msg.type === "join_room") {
+		if (wsContext.has(ws) || entering.has(ws)) return;
+		entering.add(ws);
+		try {
+			if (msg.type === "create_room") {
+				await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled, msg.includeBonuses, msg.strictness, msg.msPerWord, msg.externalPacket, msg.infinite, msg.aiJudge);
+			} else {
+				await handleJoinRoom(ws, msg.roomCode, msg.playerName);
+			}
+		} finally {
+			entering.delete(ws);
+		}
+		return;
+	}
 	switch (msg.type) {
-		case "create_room":
-			await handleCreateRoom(ws, msg.questionSetId, msg.playerName, msg.mode, msg.ttsEnabled, msg.includeBonuses, msg.strictness, msg.msPerWord, msg.externalPacket);
-			break;
-		case "join_room":
-			await handleJoinRoom(ws, msg.roomCode, msg.playerName);
-			break;
 		case "start_game":
 			handleStartGame(ws);
 			break;
@@ -109,12 +123,20 @@ async function routeMessage(ws: WebSocket, msg: ClientMessage): Promise<void> {
 		case "chat":
 			handleChat(ws, msg.text);
 			break;
+		case "chat_typing":
+			handleChatTyping(ws, msg.text);
+			break;
 		case "next_question":
 			handleNextQuestion(ws);
 			break;
 		case "skip":
 			handleSkip(ws);
 			break;
+		case "override_answer": {
+			const ctx = getContext(ws);
+			if (ctx) overrideAnswer(ctx.room, ctx.playerId, msg.playerId);
+			break;
+		}
 		case "end_game":
 			handleEndGame(ws);
 			break;
@@ -154,11 +176,19 @@ async function handleCreateRoom(
 	strictness?: number,
 	msPerWord?: number,
 	externalPacket?: ExternalPacket,
+	infinite?: CreateRoomMsg["infinite"],
+	aiJudge?: boolean,
 ): Promise<void> {
-	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, includeBonuses, strictness, msPerWord, externalPacket);
+	const { room, playerId } = await createRoom(questionSetId, playerName, mode, ws, ttsEnabled ?? false, includeBonuses, strictness, msPerWord, externalPacket, infinite, aiJudge);
 	wsContext.set(ws, { roomCode: room.code, playerId });
 	sendRaw(ws, { type: "room_created", roomCode: room.code, playerId, packetName: room.questionSetName });
 	broadcastPlayerList(room);
+
+	// Infinite rooms start writing straight away, so the first questions are ready sooner
+	if (room.infinite) {
+		sendInfiniteStatus(ws, room);
+		topUpInfinite(room);
+	}
 
 	// Fire-and-forget: start TTS pregeneration in background
 	if (room.settings.ttsEnabled) {
@@ -177,6 +207,7 @@ async function handleJoinRoom(
 		const { room, playerId } = reconnected;
 		wsContext.set(ws, { roomCode, playerId });
 		sendRaw(ws, { type: "room_joined", roomCode, playerId, packetName: room.questionSetName });
+		sendInfiniteStatus(ws, room);
 		broadcast(room, { type: "player_reconnected", playerId, playerName });
 		broadcastPlayerList(room);
 		if (room.phase !== "lobby") {
@@ -189,11 +220,17 @@ async function handleJoinRoom(
 	const { room, playerId } = joinRoom(roomCode, playerName, ws);
 	wsContext.set(ws, { roomCode, playerId });
 	sendRaw(ws, { type: "room_joined", roomCode, playerId, packetName: room.questionSetName });
+	sendInfiniteStatus(ws, room);
 	broadcastPlayerList(room);
 	if (room.phase !== "lobby") {
 		sendRaw(ws, { type: "phase_change", phase: room.phase });
 		sendRaw(ws, buildGameSync(room));
 	}
+}
+
+function sendInfiniteStatus(ws: WebSocket, room: GameRoom): void {
+	const status = infiniteStatus(room);
+	if (status) sendRaw(ws, status);
 }
 
 function getContext(ws: WebSocket): { room: GameRoom; playerId: string } | null {
@@ -267,6 +304,14 @@ function handleAnswerTyping(ws: WebSocket, text: string): void {
 }
 
 const MAX_CHAT_LENGTH = 300;
+
+function handleChatTyping(ws: WebSocket, text: string): void {
+	const ctx = getContext(ws);
+	if (!ctx) return;
+	const player = ctx.room.players.get(ctx.playerId);
+	if (!player || typeof text !== "string") return;
+	broadcast(ctx.room, { type: "chat_typing", playerId: player.id, playerName: player.name, text: text.slice(0, MAX_CHAT_LENGTH) });
+}
 
 function handleChat(ws: WebSocket, text: string): void {
 	const ctx = getContext(ws);
@@ -347,7 +392,7 @@ function handleKickPlayer(ws: WebSocket, targetPlayerId: string): void {
 	broadcastPlayerList(ctx.room);
 }
 
-function handleUpdateSettings(ws: WebSocket, msg: { strictness?: number; msPerWord?: number }): void {
+function handleUpdateSettings(ws: WebSocket, msg: { strictness?: number; msPerWord?: number; aiJudge?: boolean }): void {
 	const ctx = requireModerator(ws);
 	if (!ctx) return;
 
@@ -356,6 +401,9 @@ function handleUpdateSettings(ws: WebSocket, msg: { strictness?: number; msPerWo
 	}
 	if (msg.msPerWord != null) {
 		ctx.room.settings.msPerWord = Math.max(100, Math.min(500, Math.round(msg.msPerWord)));
+	}
+	if (typeof msg.aiJudge === "boolean") {
+		ctx.room.settings.aiJudge = msg.aiJudge;
 	}
 }
 

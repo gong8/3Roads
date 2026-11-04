@@ -1,4 +1,5 @@
 import { createLogger, getDb } from "@3roads/shared";
+import { addInfiniteCost, canWriteMore, stopInfinite, topUpInfinite } from "./infinite.js";
 import { judgeAnswer } from "./judge.js";
 import { playerUserId } from "./socket-users.js";
 import { generateTTS, storeAudio } from "./tts.js";
@@ -80,7 +81,7 @@ export function buildGameSync(room: GameRoom): GameSyncEvt {
 		const isPowerZone = tr.powerMarkWordIndex != null && tr.revealedCount <= tr.powerMarkWordIndex + 1;
 		tossup = {
 			questionNumber: room.currentQuestionIndex + 1,
-			totalQuestions: room.tossups.length,
+			totalQuestions: room.infinite ? 0 : room.tossups.length,
 			category: tossupData.category,
 			subcategory: tossupData.subcategory,
 			words: tr.words.slice(0, tr.revealedCount),
@@ -261,8 +262,11 @@ export async function pregenerateTTS(room: GameRoom): Promise<void> {
 }
 
 export function startGame(room: GameRoom): void {
-	room.tossups = shuffle(room.tossups);
-	room.bonuses = shuffle(room.bonuses);
+	// Infinite rooms play questions in the order they're written, which keeps appending simple
+	if (!room.infinite) {
+		room.tossups = shuffle(room.tossups);
+		room.bonuses = shuffle(room.bonuses);
+	}
 	room.currentQuestionIndex = 0;
 
 	// Reset scores
@@ -280,6 +284,14 @@ export function startGame(room: GameRoom): void {
 
 export async function startTossup(room: GameRoom): Promise<void> {
 	if (room.currentQuestionIndex >= room.tossups.length) {
+		if (canWriteMore(room)) {
+			// Infinite mode caught up with the writer: wait, and the batch starts the tossup when it lands
+			room.phase = "waiting_for_questions";
+			room.lastActivity = Date.now();
+			broadcast(room, { type: "phase_change", phase: "waiting_for_questions" });
+			topUpInfinite(room);
+			return;
+		}
 		endGame(room);
 		return;
 	}
@@ -316,6 +328,7 @@ export async function startTossup(room: GameRoom): Promise<void> {
 		wordDelays = computeWordDelays(words, room.settings.msPerWord * words.length);
 	}
 
+	room.tossupMisses = [];
 	room.tossupReading = {
 		tossupIndex: room.currentQuestionIndex,
 		words,
@@ -338,12 +351,14 @@ export async function startTossup(room: GameRoom): Promise<void> {
 	broadcast(room, {
 		type: "tossup_start",
 		questionNumber: room.currentQuestionIndex + 1,
-		totalQuestions: room.tossups.length,
+		totalQuestions: room.infinite ? 0 : room.tossups.length,
 		category: tossup.category,
 		subcategory: tossup.subcategory,
 		audioUrl,
 		imageUrl: tossup.imageUrl,
 	});
+	// Keep a few questions written ahead of this one
+	topUpInfinite(room);
 
 	const startWordReveals = () => {
 		// First word immediately so it syncs with audio start
@@ -466,27 +481,39 @@ export function handleBuzz(room: GameRoom, playerId: string): void {
 	openTossupAnswering(room, tr, player);
 }
 
+/** Answer time stretched for long answers: 250ms per character beyond 10, up to 8s more. */
+function answerTimeFor(baseMs: number, answer: string): number {
+	const typed = answer.replace(/\s*\[[^\]]*\]/g, "").replace(/[{}]/g, "").trim();
+	return baseMs + Math.min(8000, Math.max(0, typed.length - 10) * 250);
+}
+
 /** Give the buzzed player an answer window — after a buzz, or again after a prompt. */
 function openTossupAnswering(room: GameRoom, tr: TossupReading, player: Player): void {
 	room.phase = "awaiting_answer";
 	room.lastActivity = Date.now();
+	const timeMs = answerTimeFor(room.settings.answerTimeMs, room.tossups[room.currentQuestionIndex]?.answer ?? "");
 
 	broadcast(room, { type: "phase_change", phase: "awaiting_answer" });
 	broadcast(room, {
 		type: "await_answer",
 		playerId: player.id,
 		playerName: player.name,
-		timeMs: room.settings.answerTimeMs,
+		timeMs,
 	});
 
 	// Answer timeout with 1s grace period for client auto-submit
-	room.answerTimerDuration = room.settings.answerTimeMs + 1000;
+	room.answerTimerDuration = timeMs + 1000;
 	room.answerTimerStartedAt = Date.now();
 	room.answerTimer = setTimeout(() => {
 		if (room.phase === "awaiting_answer" && tr.buzzedPlayerId === player.id) {
 			handleAnswer(room, player.id, "");
 		}
 	}, room.answerTimerDuration);
+}
+
+/** Infinite rooms show everything they spend, so their OpenRouter judging counts too. */
+function judgeCostTracker(room: GameRoom): ((usd: number) => void) | undefined {
+	return room.infinite ? (usd) => addInfiniteCost(room, usd) : undefined;
 }
 
 /** Prompts allowed per buzz (or bonus part) before a promptable answer counts as wrong. */
@@ -523,8 +550,9 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 		answer,
 		tossup.answer,
 		questionText,
-		room.settings.strictness,
+		room.settings,
 		playerUserId(room, playerId),
+		judgeCostTracker(room),
 	);
 
 	// Guard: if game state moved on during async judging (e.g. skip/end), bail out
@@ -587,6 +615,12 @@ export async function handleAnswer(room: GameRoom, playerId: string, answer: str
 			player.negs++;
 		}
 		const buzzWordIndex = tr.buzzWordIndex ?? tr.revealedCount;
+		room.tossupMisses.push({
+			playerId,
+			penalty: points,
+			inPowerZone: tr.powerMarkWordIndex != null && tr.buzzWordIndex != null && tr.buzzWordIndex <= tr.powerMarkWordIndex + 1,
+			overridden: false,
+		});
 		tr.incorrectBuzzers.add(playerId);
 		tr.buzzedPlayerId = null;
 		tr.buzzWordIndex = null;
@@ -852,14 +886,16 @@ async function sendBonusPart(room: GameRoom): Promise<void> {
 
 function openBonusAnswering(room: GameRoom, br: NonNullable<GameRoom["bonusReading"]>): void {
 	room.phase = "bonus_answering";
+	const answer = room.bonuses[br.bonusIndex]?.parts[br.currentPart]?.answer ?? "";
+	const timeMs = answerTimeFor(room.settings.bonusAnswerTimeMs, answer);
 	broadcast(room, { type: "phase_change", phase: "bonus_answering" });
 	broadcast(room, {
 		type: "await_bonus_answer",
 		controllingPlayerId: br.controllingPlayerId,
-		timeMs: room.settings.bonusAnswerTimeMs,
+		timeMs,
 	});
 
-	room.answerTimerDuration = room.settings.bonusAnswerTimeMs + 1000;
+	room.answerTimerDuration = timeMs + 1000;
 	room.answerTimerStartedAt = Date.now();
 	room.answerTimer = setTimeout(() => {
 		if (room.phase === "bonus_answering" && room.bonusReading === br) {
@@ -918,8 +954,9 @@ export async function handleBonusAnswer(
 		answer,
 		part.answer,
 		part.text,
-		room.settings.strictness,
+		room.settings,
 		playerUserId(room, submitterId ?? br.controllingPlayerId),
+		judgeCostTracker(room),
 	);
 
 	// Guard: if game state moved on during async judging, bail out
@@ -1113,7 +1150,39 @@ export function resumeGame(room: GameRoom): void {
 	scheduleNext(br.partRevealedCount);
 }
 
+/**
+ * Mark a wrong tossup answer correct after the tossup has ended: undo its neg and award the 10
+ * (or 15) it would have earned. Anyone but the answerer may do it, or the answerer when alone.
+ * Points only: the bonus that answer would have earned isn't replayed.
+ */
+export function overrideAnswer(room: GameRoom, byPlayerId: string, playerId: string): void {
+	const by = room.players.get(byPlayerId);
+	const player = room.players.get(playerId);
+	if (!by || !player) return;
+	if (byPlayerId === playerId && room.players.size > 1) return;
+	// Only once the tossup is over (dead, answered, or into its bonus), so it can't change live play
+	if (room.tossupReading && !room.bonusReading) return;
+	const miss = room.tossupMisses.find((m) => m.playerId === playerId && !m.overridden);
+	if (!miss) return;
+
+	miss.overridden = true;
+	if (miss.penalty < 0) {
+		player.score -= miss.penalty;
+		player.negs--;
+	}
+	const points = miss.inPowerZone ? 15 : 10;
+	player.score += points;
+	if (miss.inPowerZone) player.powers++;
+	else player.tens++;
+
+	log.info(`Room ${room.code} — ${by.name} marked ${player.name}'s answer correct (+${points})`);
+	broadcast(room, { type: "answer_overridden", playerId, playerName: player.name, byName: by.name, points });
+	broadcastPlayerList(room);
+}
+
 export function skipQuestion(room: GameRoom): void {
+	// Nothing to skip yet, and advancing would skip past a question that hasn't been written
+	if (room.phase === "waiting_for_questions" || room.phase === "lobby" || room.phase === "game_over") return;
 	cancelPendingAudioReady(room);
 	const tr = room.tossupReading;
 	if (tr?.intervalHandle) {
@@ -1150,6 +1219,8 @@ export function endGame(room: GameRoom): void {
 		clearTimeout(room.answerTimer);
 		room.answerTimer = null;
 	}
+
+	void stopInfinite(room);
 
 	// Clearing these makes every pending timer and in-flight judge call bail out
 	room.tossupReading = null;
@@ -1189,9 +1260,6 @@ export function endGame(room: GameRoom): void {
 
 export function nextQuestion(room: GameRoom): void {
 	if (room.phase !== "between_questions") return;
-	if (room.currentQuestionIndex >= room.tossups.length) {
-		endGame(room);
-		return;
-	}
+	// startTossup ends the game when the set is used up, or waits for an infinite room's writer
 	startTossup(room);
 }

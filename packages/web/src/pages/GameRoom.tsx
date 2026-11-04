@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useGameAudio } from "../hooks/useGameAudio";
-import { useGameRoom } from "../hooks/useGameRoom";
+import { type InfiniteStatus, useGameRoom } from "../hooks/useGameRoom";
+import { difficultyLabel } from "../components/ModelSelect";
+import { formatCost } from "../lib/format";
 import { AnswerInput } from "../components/game/AnswerInput";
 import { BonusReader } from "../components/game/BonusReader";
 import { BuzzButton } from "../components/game/BuzzButton";
@@ -23,7 +25,11 @@ interface CreateState {
 	ttsEnabled?: boolean;
 	includeBonuses?: boolean;
 	leniency?: number;
+	/** Ask an LLM about answers the local matcher is unsure of */
+	aiJudge?: boolean;
 	readingSpeed?: number;
+	/** Infinite mode: write questions on this theme as the game goes */
+	infinite?: { theme: string; difficulty: string; style?: string; model?: string };
 }
 
 interface JoinState {
@@ -31,9 +37,48 @@ interface JoinState {
 	playerName: string;
 	/** Carried over from a create so the host keeps their settings after a refresh */
 	ttsEnabled?: boolean;
+	aiJudge?: boolean;
 }
 
 type LocationState = CreateState | JoinState | null;
+
+/** Running total for an infinite room. ChatGPT plan runs have no per-call price, so cost stays null. */
+function spentText(info: InfiniteStatus): string {
+	return info.cost != null ? formatCost(info.cost) : "— (chatgpt plan)";
+}
+
+/** An infinite room's writer: what it costs so far and how far ahead of play it is. */
+function InfiniteBar({ info }: { info: InfiniteStatus }) {
+	return (
+		<div className="mb-4 text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1">
+			<span>infinite · {difficultyLabel(info.difficulty)}</span>
+			<span>spent: <span className="text-black font-bold">{spentText(info)}</span></span>
+			<span>{info.ready} ready</span>
+			{info.generating && <span className="italic">writing more…</span>}
+			{info.error && !info.generating && <span className="text-red-700">last batch failed: {info.error}</span>}
+		</div>
+	);
+}
+
+/** The latest answer and its verdict, with a way to mark a wrong answer correct once the tossup is over. */
+function ResultLine({ result, className, canOverride, onOverride }: {
+	result: NonNullable<ReturnType<typeof useGameRoom>["state"]["lastResult"]>;
+	className: string;
+	canOverride: boolean;
+	onOverride: () => void;
+}) {
+	return (
+		<div className={`${className} text-xs ${result.correct ? "text-green-700" : "text-red-700"}`}>
+			{result.playerName}: "{result.answer}" — {result.correct ? `correct (+${result.points})` : `incorrect (${result.points})`}
+			{result.overriddenBy && <span className="text-gray-500"> · marked correct by {result.overriddenBy}</span>}
+			{!result.correct && canOverride && (
+				<button type="button" onClick={onOverride} className="ml-2 border border-gray-400 px-1 text-gray-600 hover:border-black hover:text-black">
+					mark correct
+				</button>
+			)}
+		</div>
+	);
+}
 
 export function GameRoom() {
 	const { roomCode } = useParams<{ roomCode: string }>();
@@ -52,6 +97,7 @@ export function GameRoom() {
 		startGame,
 		nextQuestion,
 		skip,
+		overrideAnswer,
 		endGame,
 		kickPlayer,
 		setTeam,
@@ -60,6 +106,7 @@ export function GameRoom() {
 		cancelTts,
 		sendTyping,
 		sendChat,
+		sendChatTyping,
 		disconnect,
 	} = useGameRoom();
 
@@ -81,8 +128,10 @@ export function GameRoom() {
 				ttsEnabled: locationState.ttsEnabled,
 				includeBonuses: locationState.includeBonuses,
 				leniency: locationState.leniency,
+				aiJudge: locationState.aiJudge,
 				msPerWord: locationState.readingSpeed,
 				externalPacket: locationState.externalPacket,
+				infinite: locationState.infinite,
 			});
 		} else if (locationState.action === "join" && roomCode) {
 			joinRoom(roomCode, locationState.playerName);
@@ -106,6 +155,7 @@ export function GameRoom() {
 				action: "join",
 				playerName: locationState.playerName,
 				ttsEnabled: locationState.ttsEnabled,
+				aiJudge: locationState.aiJudge,
 			};
 			navigate(`/play/${state.roomCode}`, { replace: true, state: rejoin });
 		}
@@ -128,6 +178,11 @@ export function GameRoom() {
 
 	const canBuzz = state.phase === "reading_tossup" && !state.neggedPlayerIds.has(state.playerId ?? "");
 	const isMyBuzz = state.awaitAnswer?.playerId === state.playerId;
+	// A wrong tossup answer can be marked correct once the tossup is over: by anyone else, or by yourself when alone
+	const canOverride =
+		state.lastResult != null &&
+		(state.tossup?.finished != null || state.phase === "between_questions") &&
+		(state.lastResult.playerId !== state.playerId || state.players.length === 1);
 
 	const canAnswerBonus = (() => {
 		if (state.phase !== "bonus_answering" || !state.bonus || !state.awaitBonusAnswer) return false;
@@ -250,9 +305,11 @@ export function GameRoom() {
 						}
 					</div>
 					<div className="text-xs text-gray-500">
-					{state.phase !== "reading_tossup" && state.phase !== "between_questions" ? state.phase : null}
+					{state.phase !== "reading_tossup" && state.phase !== "between_questions" && state.phase !== "waiting_for_questions" ? state.phase : null}
 				</div>
 				</div>
+
+				{state.infinite && <InfiniteBar info={state.infinite} />}
 
 				{/* Lobby */}
 				{state.phase === "lobby" && (
@@ -263,6 +320,12 @@ export function GameRoom() {
 						<div className="mb-3 text-xs text-gray-500">
 							share code: <span className="text-black font-bold text-lg">{displayCode}</span>
 						</div>
+
+					{state.infinite && state.infinite.ready === 0 && (
+						<div className="mb-2 text-xs text-gray-500">
+							writing the first questions… you can start now; the first tossup begins as soon as it's ready.
+						</div>
+					)}
 
 					{isModerator && state.players.length >= 1 && (
 						<button type="button" onClick={startGame} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white mt-4">
@@ -291,8 +354,8 @@ export function GameRoom() {
 				</div>
 			)}
 
-			{/* Reading Tossup / Awaiting Answer / Judging — and once answered, the finished tossup stays in place above its bonus */}
-			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || state.phase === "paused" || state.phase === "judging" || state.phase === "between_questions" || state.bonus != null) && state.phase !== "game_over" && state.tossup && (
+			{/* Reading Tossup / Awaiting Answer / Judging — once its bonus starts, the bonus takes the tossup's place */}
+			{(state.phase === "reading_tossup" || state.phase === "awaiting_answer" || state.phase === "paused" || state.phase === "judging" || state.phase === "between_questions") && state.bonus == null && state.tossup && (
 				<div>
 					<TossupReader
 						words={state.tossup.words}
@@ -342,9 +405,7 @@ export function GameRoom() {
 					)}
 
 					{state.lastResult && state.phase !== "between_questions" && (
-						<div className={`mt-2 text-xs ${state.lastResult.correct ? "text-green-700" : "text-red-700"}`}>
-							{state.lastResult.playerName}: "{state.lastResult.answer}" — {state.lastResult.correct ? `correct (+${state.lastResult.points})` : `incorrect (${state.lastResult.points})`}
-						</div>
+						<ResultLine result={state.lastResult} className="mt-2" canOverride={canOverride} onOverride={() => overrideAnswer(state.lastResult!.playerId)} />
 					)}
 
 
@@ -399,9 +460,7 @@ export function GameRoom() {
 				return (
 					<div>
 						{state.lastResult && (
-							<div className={`mb-2 text-xs ${state.lastResult.correct ? "text-green-700" : "text-red-700"}`}>
-								{state.lastResult.playerName}: "{state.lastResult.answer}" — {state.lastResult.correct ? `correct (+${state.lastResult.points})` : `incorrect (${state.lastResult.points})`}
-							</div>
+							<ResultLine result={state.lastResult} className="mb-2" canOverride={canOverride} onOverride={() => overrideAnswer(state.lastResult!.playerId)} />
 						)}
 						{state.bonus?.totalPoints != null && (
 							<div className="mb-2 text-xs text-gray-500">bonus total: {state.bonus.totalPoints}/{state.bonus.maxPoints ?? 30}</div>
@@ -429,10 +488,20 @@ export function GameRoom() {
 				);
 			})()}
 
+			{/* Infinite mode caught up with the writer */}
+			{state.phase === "waiting_for_questions" && (
+				<div className="my-4 text-sm text-gray-500 italic">writing more questions…</div>
+			)}
+
 			{/* Game over */}
 			{state.phase === "game_over" && (
 				<div>
 					<div className="mb-3 font-bold">game over</div>
+					{state.infinite && (
+						<div className="mb-3 text-xs text-gray-500">
+							{state.infinite.written} questions written, total spent {spentText(state.infinite)}. they're saved as the set "{state.packetName}".
+						</div>
+					)}
 					<button type="button" onClick={() => navigate("/play")} className="border border-black px-4 py-1 text-sm hover:bg-black hover:text-white">
 						back to lobby
 					</button>
@@ -458,18 +527,27 @@ export function GameRoom() {
 					onUpdateSettings={updateSettings}
 					players={state.players}
 					ttsEnabled={ttsEnabled}
+					aiJudge={locationState?.aiJudge ?? false}
 				/>
 			)}
 
 			{state.error && <div className="mt-3 text-red-700 text-xs">{state.error}</div>}
 
-			<ChatPanel messages={state.chat} currentPlayerId={state.playerId} open={chatOpen} onSend={sendChat} onClose={closeChat} />
+			<ChatPanel
+				messages={state.chat}
+				currentPlayerId={state.playerId}
+				open={chatOpen}
+				onSend={sendChat}
+				onClose={closeChat}
+				onTyping={sendChatTyping}
+				typing={Object.entries(state.chatTyping).filter(([id]) => id !== state.playerId).map(([, t]) => t)}
+			/>
 
 			{/* Question History */}
 			{state.phase !== "lobby" && (
 				// The current question is shown in place until the next one starts, so leave it out of the list
 				<QuestionHistory
-					history={state.phase === "game_over" ? state.history : state.history.filter((h) => h.questionNumber !== state.tossup?.questionNumber)}
+					history={state.phase === "game_over" ? state.history : state.history.filter((h) => h.questionNumber !== state.tossup?.questionNumber || (state.bonus != null && h.type === "tossup"))}
 				/>
 			)}
 			</div>

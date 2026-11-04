@@ -91,6 +91,7 @@ model User {
   sets      QuestionSet[]
   folders   Folder[]
   games     GameResult[]
+  learnPacks LearnPack[]
 }
 
 /// A user's "Sign in with ChatGPT" grant, used for their inference. Stored server-side
@@ -119,4 +120,39 @@ model GameResult {
   negs      Int
   createdAt DateTime @default(now())
   @@index([userId, createdAt])
+}
+
+/// A drill packet for the learn page: many short "prompt -> answer" cards (painting -> artist).
+model LearnPack {
+  id          String      @id @default(cuid())
+  name        String
+  /// What the packet covers, e.g. "Impressionist paintings"
+  topic       String
+  /// What each card shows, e.g. "painting"
+  promptKind  String
+  /// What the player answers with, e.g. "artist"
+  answerKind  String
+  status      String      @default("generating")
+  error       String?
+  cost        Float?
+  ownerId     String?
+  owner       User?       @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  isPrivate   Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  cards       LearnCard[]
+  @@index([ownerId])
+}
+
+model LearnCard {
+  id        String    @id @default(cuid())
+  packId    String
+  pack      LearnPack @relation(fields: [packId], references: [id], onDelete: Cascade)
+  /// Shown to the player, e.g. "The Starry Night"
+  prompt    String
+  /// Brace-marked answer line the judge reads, e.g. "Vincent van {Gogh}"
+  answer    String
+  /// Optional context shown after answering, e.g. "1889"
+  detail    String?
+  createdAt DateTime  @default(now())
+  @@index([packId])
 }

@@ -12,6 +12,8 @@ type GamePhase =
 	| "bonus_answering"
 	| "between_questions"
 	| "paused"
+	/** Infinite mode: the next question is still being written */
+	| "waiting_for_questions"
 	| "game_over";
 
 type Team = "a" | "b";
@@ -62,6 +64,8 @@ interface AnswerResult {
 	answer: string;
 	correct: boolean;
 	points: number;
+	/** Set when another player (or a solo player) marked a wrong answer correct */
+	overriddenBy?: string;
 }
 
 export interface HistoryEntry {
@@ -79,6 +83,19 @@ export interface HistoryEntry {
 	partResults?: { partNumber: number; correct: boolean; answer: string; submittedAnswer: string; points: number; partText?: string }[];
 	totalBonusPoints?: number;
 	maxBonusPoints?: number;
+}
+
+/** An infinite room's writer: what it's writing about, how far ahead it is, and what it has cost */
+export interface InfiniteStatus {
+	theme: string;
+	difficulty: string;
+	model: string;
+	/** OpenRouter dollars spent so far; null when everything ran on a ChatGPT plan */
+	cost: number | null;
+	generating: boolean;
+	ready: number;
+	written: number;
+	error: string | null;
 }
 
 export interface ChatMessage {
@@ -109,10 +126,13 @@ export interface GameState {
 	ttsProgress: { current: number; total: number; etaMs?: number } | null;
 	history: HistoryEntry[];
 	answerTyping: { playerName: string; text: string } | null;
+	/** Chat messages other players are typing right now, by player id */
+	chatTyping: Record<string, { playerName: string; text: string }>;
 	pictureBuzzWindowEndMs: number | null;
 	/** Set when the judge asked the answering player to be more specific */
 	prompt: { playerId: string; playerName: string; answer: string; isBonus: boolean } | null;
 	chat: ChatMessage[];
+	infinite: InfiniteStatus | null;
 }
 
 type Action =
@@ -142,8 +162,11 @@ type Action =
 	| { type: "player_reconnected"; playerId: string; playerName: string }
 	| { type: "tts_progress"; current: number; total: number; etaMs?: number }
 	| { type: "answer_typing"; playerName: string; text: string }
+	| { type: "chat_typing"; playerId: string; playerName: string; text: string }
 	| { type: "answer_prompt"; playerId: string; playerName: string; answer: string; isBonus: boolean }
 	| ({ type: "chat" } & ChatMessage)
+	| { type: "answer_overridden"; playerId: string; playerName: string; byName: string; points: number }
+	| ({ type: "infinite_status" } & InfiniteStatus)
 	| {
 		type: "game_sync";
 		tossup: {
@@ -197,9 +220,11 @@ const initialState: GameState = {
 	ttsProgress: null,
 	history: [],
 	answerTyping: null,
+	chatTyping: {},
 	pictureBuzzWindowEndMs: null,
 	prompt: null,
 	chat: [],
+	infinite: null,
 };
 
 function reducer(state: GameState, action: Action): GameState {
@@ -423,11 +448,38 @@ function reducer(state: GameState, action: Action): GameState {
 			return state; // player_list update handles this
 		case "answer_prompt":
 			return { ...state, prompt: { playerId: action.playerId, playerName: action.playerName, answer: action.answer, isBonus: action.isBonus }, answerTyping: null };
-		case "chat":
+		case "chat_typing": {
+			const { [action.playerId]: _, ...others } = state.chatTyping;
+			return {
+				...state,
+				chatTyping: action.text ? { ...others, [action.playerId]: { playerName: action.playerName, text: action.text } } : others,
+			};
+		}
+		case "chat": {
+			// A sent message replaces its live preview
+			const { [action.playerId]: _, ...chatTyping } = state.chatTyping;
 			// Keep the log bounded for long games
-			return { ...state, chat: [...state.chat, { playerId: action.playerId, playerName: action.playerName, text: action.text, sentAt: action.sentAt }].slice(-100) };
+			return { ...state, chatTyping, chat: [...state.chat, { playerId: action.playerId, playerName: action.playerName, text: action.text, sentAt: action.sentAt }].slice(-100) };
+		}
 		case "answer_typing":
 			return { ...state, answerTyping: { playerName: action.playerName, text: action.text } };
+		case "answer_overridden": {
+			const markCorrect = <T extends { playerName: string; correct: boolean; points: number }>(b: T): T =>
+				b.playerName === action.playerName && !b.correct ? { ...b, correct: true, points: action.points } : b;
+			// The latest tossup's history entry shows the corrected buzz too
+			const lastTossup = state.history.map((h) => h.type).lastIndexOf("tossup");
+			return {
+				...state,
+				lastResult: state.lastResult?.playerId === action.playerId
+					? { ...state.lastResult, correct: true, points: action.points, overriddenBy: action.byName }
+					: state.lastResult,
+				history: state.history.map((h, i) => (i === lastTossup ? { ...h, buzzes: h.buzzes?.map(markCorrect) } : h)),
+			};
+		}
+		case "infinite_status": {
+			const { type: _, ...infinite } = action;
+			return { ...state, infinite };
+		}
 		case "game_sync":
 			return {
 				...state,
@@ -499,7 +551,7 @@ export function useGameRoom() {
 	}, []);
 
 	const createRoom = useCallback(
-		async (questionSetId: string | undefined, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, includeBonuses?: boolean, leniency?: number, msPerWord?: number, externalPacket?: unknown }) => {
+		async (questionSetId: string | undefined, playerName: string, mode: "ffa" | "teams", options?: { ttsEnabled?: boolean, includeBonuses?: boolean, leniency?: number, aiJudge?: boolean, msPerWord?: number, externalPacket?: unknown, infinite?: { theme: string; difficulty: string; style?: string; model?: string } }) => {
 			// The socket authenticates with Clerk's short-lived __session cookie; refresh it first
 			// in case this tab sat in the background.
 			await authHeaders();
@@ -509,7 +561,7 @@ export function useGameRoom() {
 			} catch {
 				return; // disconnect handler already dispatched
 			}
-			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled: options?.ttsEnabled, includeBonuses: options?.includeBonuses, strictness: options?.leniency, msPerWord: options?.msPerWord, externalPacket: options?.externalPacket });
+			send({ type: "create_room", questionSetId, playerName, mode, ttsEnabled: options?.ttsEnabled, includeBonuses: options?.includeBonuses, strictness: options?.leniency, aiJudge: options?.aiJudge, msPerWord: options?.msPerWord, externalPacket: options?.externalPacket, infinite: options?.infinite });
 		},
 		[connect, send],
 	);
@@ -538,14 +590,16 @@ export function useGameRoom() {
 	const startGame = useCallback(() => send({ type: "start_game" }), [send]);
 	const nextQuestion = useCallback(() => send({ type: "next_question" }), [send]);
 	const skip = useCallback(() => send({ type: "skip" }), [send]);
+	const overrideAnswer = useCallback((playerId: string) => send({ type: "override_answer", playerId }), [send]);
 	const endGame = useCallback(() => send({ type: "end_game" }), [send]);
 	const kickPlayer = useCallback((playerId: string) => send({ type: "kick_player", playerId }), [send]);
 	const setTeam = useCallback((playerId: string, team: "a" | "b") => send({ type: "set_team", playerId, team }), [send]);
-	const updateSettings = useCallback((settings: { strictness?: number; msPerWord?: number }) => send({ type: "update_settings", ...settings }), [send]);
+	const updateSettings = useCallback((settings: { strictness?: number; msPerWord?: number; aiJudge?: boolean }) => send({ type: "update_settings", ...settings }), [send]);
 	const sendAudioReady = useCallback(() => send({ type: "audio_ready" }), [send]);
 	const cancelTts = useCallback(() => send({ type: "cancel_tts" }), [send]);
 	const sendTyping = useCallback((text: string) => send({ type: "answer_typing", text }), [send]);
 	const sendChat = useCallback((text: string) => send({ type: "chat", text }), [send]);
+	const sendChatTyping = useCallback((text: string) => send({ type: "chat_typing", text }), [send]);
 	const clearError = useCallback(() => dispatch({ type: "clear_error" }), []);
 	const disconnect = useCallback(() => {
 		socketRef.current?.close();
@@ -564,6 +618,7 @@ export function useGameRoom() {
 		startGame,
 		nextQuestion,
 		skip,
+		overrideAnswer,
 		endGame,
 		kickPlayer,
 		setTeam,
@@ -572,6 +627,7 @@ export function useGameRoom() {
 		cancelTts,
 		sendTyping,
 		sendChat,
+		sendChatTyping,
 		clearError,
 		disconnect,
 	};

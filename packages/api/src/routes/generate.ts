@@ -3,7 +3,10 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
 import { canUseModel, modelUnavailableMessage, streamLlmChat } from "../services/llm-chat.js";
-import { MAX_SET_QUESTIONS, runGeneration } from "../services/generate-orchestrator.js";
+import { MAX_SET_QUESTIONS, MAX_STYLE_LENGTH, runPacketGenerations } from "../services/generate-orchestrator.js";
+
+/** Most packets one generate request can ask for. */
+const MAX_PACKETS = 5;
 import { startStream, subscribe } from "../services/stream-manager.js";
 import { currentUser } from "../services/user-auth.js";
 
@@ -212,6 +215,10 @@ generateRoutes.post("/", async (c) => {
 			bonusCount: number;
 			pictureCount?: number;
 			difficulty: string;
+			/** Free-text description of the kind of question wanted */
+			style?: string;
+			/** Separate sets to write on the same settings, which never share an answer */
+			packetCount?: number;
 			model?: string;
 		}>();
 
@@ -224,36 +231,47 @@ generateRoutes.post("/", async (c) => {
 		}
 
 		const difficulty = body.difficulty || "Regular High School";
+		const packetCount = Math.min(Math.max(1, Math.floor(body.packetCount || 1)), MAX_PACKETS);
 		const db = getDb();
 
-		const set = await db.questionSet.create({
-			data: {
-				name: body.theme,
-				theme: body.theme,
-				difficulty,
-				status: "generating",
-				ownerId: user.id,
-			},
-		});
+		const sets = [];
+		for (let i = 1; i <= packetCount; i++) {
+			sets.push(
+				await db.questionSet.create({
+					data: {
+						name: packetCount > 1 ? `${body.theme} (packet ${i})` : body.theme,
+						theme: body.theme,
+						difficulty,
+						status: "generating",
+						ownerId: user.id,
+					},
+				}),
+			);
+		}
 
-		log.info(`POST /generate — created set ${set.id}, launching background generation`);
+		const setIds = sets.map((s) => s.id);
+		log.info(`POST /generate — created ${setIds.join(", ")}, launching background generation`);
 
 		// Fire-and-forget — generation updates status in DB
-		runGeneration({
-			setId: set.id,
-			theme: body.theme,
-			difficulty,
-			tossupCount: Math.min(body.tossupCount || 0, MAX_SET_QUESTIONS),
-			bonusCount: Math.min(body.bonusCount || 0, MAX_SET_QUESTIONS),
-			pictureCount: body.pictureCount || 0,
-			model: body.model,
-			userId: user.id,
-		}).catch((err) => {
-			log.error(`POST /generate — background generation failed for ${set.id}: ${err}`);
+		runPacketGenerations(
+			sets.map((set) => ({
+				setId: set.id,
+				theme: body.theme,
+				difficulty,
+				style: body.style?.trim().slice(0, MAX_STYLE_LENGTH) || undefined,
+				tossupCount: Math.min(body.tossupCount || 0, MAX_SET_QUESTIONS),
+				bonusCount: Math.min(body.bonusCount || 0, MAX_SET_QUESTIONS),
+				pictureCount: body.pictureCount || 0,
+				model: body.model,
+				userId: user.id,
+			})),
+		).catch((err) => {
+			log.error(`POST /generate — background generation failed for ${setIds.join(", ")}: ${err}`);
 		});
 
 		return c.json({
-			setId: set.id,
+			setId: setIds[0],
+			sets: sets.map((s) => ({ id: s.id, name: s.name })),
 			status: "generating",
 			tossupCount: Math.min(body.tossupCount || 0, MAX_SET_QUESTIONS),
 			bonusCount: Math.min(body.bonusCount || 0, MAX_SET_QUESTIONS),

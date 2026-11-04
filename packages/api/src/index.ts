@@ -13,6 +13,7 @@ import { Hono } from "hono";
 import { attachGameWebSocket } from "./game/index.js";
 import { getAudio } from "./game/tts.js";
 import { foldersRoutes } from "./routes/folders.js";
+import { learnRoutes } from "./routes/learn.js";
 import { generateRoutes } from "./routes/generate.js";
 import { meRoutes } from "./routes/me.js";
 import { pictureRoundsRoutes } from "./routes/picture-rounds.js";
@@ -51,6 +52,7 @@ api.route("/me", meRoutes);
 api.route("/generate", generateRoutes);
 api.route("/sets", setsRoutes);
 api.route("/folders", foldersRoutes);
+api.route("/learn", learnRoutes);
 api.route("/qbreader", qbreaderRoutes);
 api.route("/picture-rounds", pictureRoundsRoutes);
 

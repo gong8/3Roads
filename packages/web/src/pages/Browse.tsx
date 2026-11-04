@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import { difficultyLabel } from "../components/ModelSelect";
 import { useSets, useUpdateSet, useDeleteSet } from "../hooks/useSets";
 import { useFolders, useCreateFolder, useUpdateFolder, useDeleteFolder } from "../hooks/useFolders";
 import type { Folder } from "../hooks/useFolders";
@@ -173,8 +174,11 @@ export function Browse() {
                 <td className="py-1 pr-4 break-words">
                   <Link to={`/sets/${s.id}`} className="underline">{s.name}</Link>
                   {s.isPrivate && <span className="ml-2 text-xs text-gray-500">private</span>}
+                  {s.status !== "generating" && (s.tossupCount ?? 0) > 0 && (
+                    <Link to={`/play?set=${s.id}`} className="ml-2 text-xs border border-black px-1 hover:bg-black hover:text-white">play</Link>
+                  )}
                 </td>
-                <td className="py-1">{s.difficulty}</td>
+                <td className="py-1">{difficultyLabel(s.difficulty)}</td>
                 {s.status === "generating" ? (
                   <td colSpan={3} className="py-1 text-center px-4 text-sm text-gray-500 italic">
                     generating… ({s.tossupCount ?? 0} tossups, {s.bonusCount ?? 0} bonuses so far)
