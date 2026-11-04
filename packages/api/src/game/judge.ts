@@ -97,7 +97,8 @@ function romanToArabic(word: string): string {
 const NUMBER_WORDS: Record<string, string> = {
 	zero: "0", one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10",
 	eleven: "11", twelve: "12", thirteen: "13", fourteen: "14", fifteen: "15", sixteen: "16", seventeen: "17",
-	eighteen: "18", nineteen: "19", twenty: "20",
+	eighteen: "18", nineteen: "19", twenty: "20", thirty: "30", forty: "40", fifty: "50", sixty: "60", seventy: "70",
+	eighty: "80", ninety: "90", hundred: "100",
 };
 
 /**
@@ -249,7 +250,15 @@ function heuristicMatch(submitted: string, form: string): boolean {
 	// (e.g. "{Ely}, Cambridgeshire" rejects "cambridgeshire")
 	const required = [...form.matchAll(/\{([^}]*)\}/g)].map((m) => m[1]);
 	// The full answer, typos and all, is fine too: it contains the braced part
-	if (required.length > 0) return stemMatch(submitted, normalize(required.join(" "))) || stemMatch(submitted, normalizedForm);
+	if (required.length > 0) {
+		const requiredWords = normalize(required.join(" "));
+		if (stemMatch(submitted, requiredWords) || stemMatch(submitted, normalizedForm)) return true;
+		// Any run of the answer's words that ends with the braced part: "van gogh" for "Vincent van {Gogh}"
+		const formWords = normalizedForm.split(" ");
+		const n = submitted.split(" ").length;
+		const end = formWords.lastIndexOf(requiredWords.split(" ").at(-1) ?? "");
+		return end + 1 - n >= 0 && n > 1 && stemMatch(submitted, formWords.slice(end + 1 - n, end + 1).join(" ")) && formWords.slice(end + 1 - n, end + 1).join(" ").includes(requiredWords);
+	}
 
 	if (stemMatch(submitted, normalizedForm)) return true;
 	if (acronymMatch(submitted, normalizedForm) || middleOmittedMatch(submitted, normalizedForm) || descriptorMatch(submitted, normalizedForm)) {

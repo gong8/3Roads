@@ -11,6 +11,7 @@ function Nav({ account }: { account: ReactNode }) {
         <Link to="/" className={pathname === "/" ? "underline" : ""}>browse</Link>
         <Link to="/generate" className={pathname === "/generate" ? "underline" : ""}>generate</Link>
         <Link to="/play" className={pathname.startsWith("/play") ? "underline" : ""}>play</Link>
+        <Link to="/learn" className={pathname.startsWith("/learn") ? "underline" : ""}>learn</Link>
         <Link to="/settings" className={`ml-auto ${pathname === "/settings" ? "underline" : ""}`}>settings</Link>
         {account}
       </nav>

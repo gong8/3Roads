@@ -13,14 +13,14 @@ const BONUSES_PER_BATCH = 25;
 /** LLM calls in flight at once while writing a set. */
 const MAX_PARALLEL_CALLS = 6;
 
-function chunk<T>(items: T[], size: number): T[][] {
+export function chunk<T>(items: T[], size: number): T[][] {
 	const chunks: T[][] = [];
 	for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
 	return chunks;
 }
 
 /** Like Promise.allSettled over thunks, but with at most `limit` running at once. */
-async function settleLimited<T>(jobs: (() => Promise<T>)[], limit: number): Promise<PromiseSettledResult<T>[]> {
+export async function settleLimited<T>(jobs: (() => Promise<T>)[], limit: number): Promise<PromiseSettledResult<T>[]> {
 	const results: PromiseSettledResult<T>[] = new Array(jobs.length);
 	let next = 0;
 	const worker = async () => {
@@ -60,7 +60,7 @@ function answerKey(answer: string): string {
 }
 
 /** True when two answers name the same thing, including "Baikal" vs "Lake Baikal". */
-function sameAnswer(a: string, b: string): boolean {
+export function sameAnswer(a: string, b: string): boolean {
 	const ka = answerKey(a);
 	const kb = answerKey(b);
 	if (!ka || !kb) return false;
@@ -358,7 +358,7 @@ const POOL_FACTOR = 3;
 const PRIOR_SETS_TO_AVOID = 20;
 const MAX_AVOIDED_ANSWERS = 400;
 
-function shuffle<T>(arr: T[]): T[] {
+export function shuffle<T>(arr: T[]): T[] {
 	const a = [...arr];
 	for (let i = a.length - 1; i > 0; i--) {
 		const j = Math.floor(Math.random() * (i + 1));
